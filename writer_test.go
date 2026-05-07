@@ -209,3 +209,63 @@ func TestWriter_MetadataIdempotency(t *testing.T) {
 		t.Errorf("Extra fields bloated! initial %d, current %d. Likely duplicate tags.", initialExtraLen, len(fh.Extra))
 	}
 }
+func TestWriter_CDE(t *testing.T) {
+	password := "cd-secret"
+	buf := new(bytes.Buffer)
+
+	// 1. Создаем архив с зашифрованным оглавлением
+	zw := NewWriter(buf)
+	zw.SetEncryptCentralDirectory(true, password)
+	w, _ := zw.Create("hidden.txt")
+	w.Write([]byte("can you see me?"))
+	zw.Close()
+
+	raw := buf.Bytes()
+
+	// 2. Пытаемся открыть без пароля — должно упасть при чтении заголовков
+	_, err := NewReader(bytes.NewReader(raw), int64(len(raw)))
+	if err == nil {
+		t.Error("expected error when opening CDE archive without password")
+	}
+
+	// 2.1 Пытаемся открыть с НЕВЕРНЫМ паролем
+	zrWrong := new(Reader)
+	zrWrong.SetPassword("wrong-password")
+	err = zrWrong.init(bytes.NewReader(raw), int64(len(raw)))
+	if err == nil || err.Error() != "zip: incorrect password" {
+		t.Errorf("expected 'incorrect password' error, got: %v", err)
+	}
+
+	// 3. Открываем с корректным паролем
+	zr := new(Reader)
+	zr.SetPassword(password)
+	// Прямой вызов init, так как NewReader не принимает пароль в конструктор сразу
+	err = zr.init(bytes.NewReader(raw), int64(len(raw)))
+	if err != nil {
+		t.Fatalf("failed to open CDE archive with password: %v", err)
+	}
+
+	if len(zr.File) != 1 || zr.File[0].Name != "hidden.txt" {
+		t.Errorf("failed to recover file list from CDE")
+	}
+}
+
+func TestWriter_StreamingForced(t *testing.T) {
+	buf := new(bytes.Buffer)
+	zw := NewWriter(buf)
+
+	// Симулируем стриминг через SetOffset
+	zw.SetOffset(0)
+
+	fh := &FileHeader{Name: "stream.txt", Method: Store}
+	// Даже для Store мы можем форсировать дескриптор, если хотим абсолютный стриминг
+	w, _ := zw.CreateHeader(fh)
+	w.Write([]byte("streaming data"))
+	zw.Close()
+
+	// Проверяем, что флаг 0x8 (Data Descriptor) установлен
+	zr, _ := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if zr.File[0].Flags&0x8 == 0 {
+		t.Error("Data Descriptor flag not set in streaming mode")
+	}
+}

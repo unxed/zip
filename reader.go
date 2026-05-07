@@ -136,7 +136,7 @@ func (r *Reader) init(rdr io.ReaderAt, size int64) error {
 	for {
 		f := &File{zip: r, zipr: rdr}
 		err = readDirectoryHeader(f, buf)
-		if err == ErrFormat || err == io.ErrUnexpectedEOF {
+		if err == ErrFormat || err == io.ErrUnexpectedEOF || err == io.EOF {
 			break
 		}
 		if err != nil {
@@ -518,6 +518,8 @@ parseExtras:
 				f.Gid = gid
 				f.OwnerSet = true
 			}
+		case ntfsAclExtraID:
+			f.Acl = parseNtfsAcl(f.Extra)
 		case extTimeExtraID:
 			if len(fieldBuf) < 1 {
 				continue parseExtras

@@ -3,6 +3,7 @@ package zip
 import (
 	"bufio"
 	"encoding/binary"
+	"bytes"
 	"errors"
 	"hash"
 	"hash/crc32"
@@ -26,6 +27,8 @@ type Writer struct {
 	comment     string
 
 	testHookCloseSizeOffset func(size, offset uint64)
+	encryptCD   bool
+	password    string
 }
 
 type header struct {
@@ -56,6 +59,13 @@ func (w *Writer) SetComment(comment string) error {
 	w.comment = comment
 	return nil
 }
+// SetEncryptCentralDirectory enables encryption of the central directory records.
+// This hides file names and metadata from unauthorized users.
+// Requires a password to be set.
+func (w *Writer) SetEncryptCentralDirectory(enable bool, password string) {
+	w.encryptCD = enable
+	w.password = password
+}
 
 func (w *Writer) Close() error {
 	if w.last != nil && !w.last.closed {
@@ -68,8 +78,18 @@ func (w *Writer) Close() error {
 		return errors.New("zip: writer closed twice")
 	}
 	w.closed = true
-
+	
 	start := w.cw.count
+	
+	var cdWriter io.Writer = w.cw
+	var cdBuf *bytes.Buffer
+	var aesW io.WriteCloser
+
+	if w.encryptCD && w.password != "" {
+		cdBuf = new(bytes.Buffer)
+		cdWriter = cdBuf
+	}
+
 	for _, h := range w.dir {
 		var buf [directoryHeaderLen]byte
 		b := writeBuf(buf[:])
@@ -108,35 +128,61 @@ func (w *Writer) Close() error {
 		} else {
 			b.uint32(uint32(h.offset))
 		}
-		if _, err := w.cw.Write(buf[:]); err != nil {
+		if _, err := cdWriter.Write(buf[:]); err != nil {
 			return err
 		}
-		if _, err := io.WriteString(w.cw, h.Name); err != nil {
+		if _, err := io.WriteString(cdWriter, h.Name); err != nil {
 			return err
 		}
-		if _, err := w.cw.Write(h.Extra); err != nil {
+		if _, err := cdWriter.Write(h.Extra); err != nil {
 			return err
 		}
-		if _, err := io.WriteString(w.cw, h.Comment); err != nil {
+		if _, err := io.WriteString(cdWriter, h.Comment); err != nil {
 			return err
 		}
 	}
+
+	if w.encryptCD && w.password != "" {
+		// Теперь шифруем накопленный буфер оглавления
+		// Используем AES-256 (strength 3) для CDE
+		var err error
+		aesW, err = newWinZipAesWriter(w.cw, w.password, 3)
+		if err != nil {
+			return err
+		}
+		if _, err := aesW.Write(cdBuf.Bytes()); err != nil {
+			return err
+		}
+		aesW.Close()
+	}
+
 	end := w.cw.count
 
 	records := uint64(len(w.dir))
 	size := uint64(end - start)
 	offset := uint64(start)
 
+	var unencryptedSize uint64
+	if w.encryptCD && cdBuf != nil {
+		unencryptedSize = uint64(cdBuf.Len())
+	}
+
 	if f := w.testHookCloseSizeOffset; f != nil {
 		f(size, offset)
 	}
 
-	if records >= uint16max || size >= uint32max || offset >= uint32max {
-		var buf [directory64EndLen + directory64LocLen]byte
+	if records >= uint16max || size >= uint32max || offset >= uint32max || w.encryptCD {
+		// Для CDE всегда требуется ZIP64 EOCD Record Version 2
+		extraSize := uint64(0)
+		if w.encryptCD {
+			extraSize = 24 // Размер полей SES v2
+		}
+
+		var buf [directory64EndLen + directory64LocLen + 24]byte
 		b := writeBuf(buf[:])
 
 		b.uint32(directory64EndSignature)
-		b.uint64(directory64EndLen - 12)
+		b.uint64(directory64EndLen - 12 + extraSize)
 		b.uint16(zipVersion45)
 		b.uint16(zipVersion45)
 		b.uint32(0)
@@ -145,6 +191,16 @@ func (w *Writer) Close() error {
 		b.uint64(records)
 		b.uint64(size)
 		b.uint64(offset)
+
+		if w.encryptCD {
+			// SES Version 2 fields
+			b.uint16(Store)  // Compression: None
+			b.uint64(size)   // Compressed size (includes Salt + HMAC)
+			b.uint64(unencryptedSize) // Original size (CD headers only)
+			b.uint16(sesAES256)
+			b.uint16(256)
+			b.uint16(0x0001) // Flag: Encrypted
+		}
 
 		b.uint32(directory64LocSignature)
 		b.uint32(0)
@@ -313,14 +369,18 @@ func writeHeader(w io.Writer, h *header) error {
 	b.uint16(h.ModifiedTime)
 	b.uint16(h.ModifiedDate)
 
+	// In streaming mode or when forced by flags, always use Data Descriptor.
+	// This ensures we never need to Seek back to the Local Header.
 	if h.raw && !h.hasDataDescriptor() {
 		b.uint32(h.CRC32)
 		b.uint32(uint32(min(h.CompressedSize64, uint32max)))
 		b.uint32(uint32(min(h.UncompressedSize64, uint32max)))
 	} else {
+		// Zero out sizes in header, they will be provided in the footer (Data Descriptor)
 		b.uint32(0)
 		b.uint32(0)
 		b.uint32(0)
+		h.Flags |= 0x8
 	}
 	b.uint16(uint16(len(h.Name)))
 	b.uint16(uint16(len(h.Extra)))

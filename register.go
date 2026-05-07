@@ -187,10 +187,14 @@ var (
 func init() {
 	compressors.Store(Store, Compressor(func(w io.Writer) (io.WriteCloser, error) { return &nopCloser{w}, nil }))
 	compressors.Store(Deflate, Compressor(func(w io.Writer) (io.WriteCloser, error) { return newFlateWriter(w), nil }))
+	// Deflate64 writing is not natively supported by klauspost/compress,
+	// but Deflate is a valid compatible subset.
+	compressors.Store(Deflate64, Compressor(func(w io.Writer) (io.WriteCloser, error) { return newFlateWriter(w), nil }))
 	compressors.Store(ZSTD, Compressor(newZstdWriter))
 
 	decompressors.Store(Store, Decompressor(io.NopCloser))
 	decompressors.Store(Deflate, Decompressor(newFlateReader))
+	decompressors.Store(Deflate64, Decompressor(func(r io.Reader) io.ReadCloser { return decodeDeflate64(r) }))
 	decompressors.Store(BZIP2, Decompressor(func(r io.Reader) io.ReadCloser { return io.NopCloser(bzip2.NewReader(r)) }))
 	decompressors.Store(LZMA, Decompressor(newLZMAReader))
 	decompressors.Store(ZSTD, Decompressor(newZstdReader))

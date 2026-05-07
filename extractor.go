@@ -322,6 +322,11 @@ func (e *Extractor) updateFileMetadata(path string, file *File) error {
 		return err
 	}
 
+	// Apply Windows ACL if present
+	if len(file.Acl) > 0 {
+		applyNtfsAcl(path, file.Acl)
+	}
+
 	if !file.OwnerSet {
 		return nil
 	}

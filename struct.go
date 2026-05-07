@@ -9,9 +9,10 @@ import (
 
 // Compression methods.
 const (
-	Store   uint16 = 0 // no compression
-	Deflate uint16 = 8 // DEFLATE compressed
-	BZIP2   uint16 = 12
+	Store     uint16 = 0 // no compression
+	Deflate   uint16 = 8 // DEFLATE compressed
+	Deflate64 uint16 = 9
+	BZIP2     uint16 = 12
 	LZMA    uint16 = 14
 	ZSTD    uint16 = 93 // Zstandard compressed
 )
@@ -58,6 +59,7 @@ const (
 	unicodePathExtraID    = 0x7075 // Info-ZIP Unicode Path Extra Field
 	unicodeCommentExtraID = 0x6375 // Info-ZIP Unicode Comment Extra Field
 	winzipAesExtraID      = 0x9901 // WinZip AES encryption extra field
+	ntfsAclExtraID        = 0x4453 // Windows NT Security Descriptor (ACL)
 )
 const (
 	// Strong Encryption (SES) Algorithm IDs
@@ -99,6 +101,8 @@ type FileHeader struct {
 	Uid      int
 	Gid      int
 	OwnerSet bool
+	// NTFS Attributes
+	Acl      []byte // Windows Security Descriptor (ACL)
 
 	// WinZip AES encryption
 	Password    string
@@ -264,6 +268,11 @@ func (fh *FileHeader) injectAutoExtras() uint16 {
 	// 3. Unix IDs (0x7875)
 	if fh.OwnerSet && !hasTag(infoZipNewUnixExtraID) {
 		fh.Extra = appendUnixExtra(fh.Extra, fh.Uid, fh.Gid)
+	}
+
+	// 3.1 NTFS ACLs (0x4453)
+	if len(fh.Acl) > 0 && !hasTag(ntfsAclExtraID) {
+		fh.Extra = appendNtfsAcl(fh.Extra, fh.Acl)
 	}
 
 	// 4. AES Encryption (0x9901)

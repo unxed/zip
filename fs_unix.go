@@ -44,6 +44,9 @@ func lchtimes(name string, mode os.FileMode, atime, mtime time.Time) error {
 func lchown(name string, uid, gid int) error {
 	return os.Lchown(name, uid, gid)
 }
+func applyNtfsAcl(path string, acl []byte) error {
+	return nil // No-op on Unix
+}
 
 func appendPlatformExtra(fi os.FileInfo, hdr *FileHeader, force bool) {
 	if !force {
@@ -54,4 +57,5 @@ func appendPlatformExtra(fi os.FileInfo, hdr *FileHeader, force bool) {
 		hdr.Gid = int(stat.Gid)
 		hdr.OwnerSet = true
 	}
+	// On Unix, we don't automatically generate NTFS ACLs
 }

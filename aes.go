@@ -92,6 +92,9 @@ func newWinZipAesReader(r io.Reader, password string, info *winzipAesInfo, compr
 
 	// Ограничиваем ридер, чтобы не зайти на HMAC (10 байт в конце)
 	dataSize := compressedSize - int64(saltLen) - 2 - 10
+	if dataSize < 0 {
+		return nil, 0, errors.New("zip: encrypted data too short")
+	}
 	limitedR := io.LimitReader(r, dataSize)
 
 	return &aesReader{
