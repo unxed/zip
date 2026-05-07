@@ -104,3 +104,30 @@ func TestUpdater(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdater_RemoveFirstFile(t *testing.T) {
+	tempDir := t.TempDir()
+	zipPath := filepath.Join(tempDir, "remove.zip")
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	zw.Create("file1.txt") // will be removed
+	w, _ := zw.Create("file2.txt")
+	w.Write([]byte("keep-me"))
+	zw.Close()
+	f.Close()
+
+	fRW, _ := os.OpenFile(zipPath, os.O_RDWR, 0644)
+	u, _ := NewUpdater(fRW)
+	// Overwrite file1.txt to trigger removal and shift of file2.txt
+	w1, _ := u.Append("file1.txt", APPEND_MODE_OVERWRITE)
+	w1.Write([]byte("new-file1-is-shorter"))
+	u.Close()
+	fRW.Close()
+
+	zr, _ := OpenReader(zipPath)
+	defer zr.Close()
+	if len(zr.File) != 2 {
+		t.Fatalf("expected 2 files, got %d", len(zr.File))
+	}
+}
