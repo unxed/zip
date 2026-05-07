@@ -108,6 +108,16 @@ func TestInitSystemLocales_Japanese(t *testing.T) {
 		t.Errorf("expected Shift-JIS decoder after setting ja_JP locale, got %s", string(res))
 	}
 }
+func TestCharset_UnknownFallback(t *testing.T) {
+	// Подаем кодировку, которой нет в маппинге
+	raw := []byte{0x41, 0x42, 0x43} // "ABC"
+	// decodeText(raw, isUTF8Flag, packOS, packVer, extra, isComment)
+	// Ставим флаги так, чтобы сработал Step 6 (System/Fallback)
+	got := decodeText(raw, false, 99, 99, nil, false)
+	if got != "ABC" {
+		t.Errorf("expected raw string fallback, got %q", got)
+	}
+}
 
 func TestParseUnicodeExtraField_Malformed(t *testing.T) {
 	// Test short extra field

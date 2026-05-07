@@ -3,6 +3,8 @@ package zip
 import (
 	"bytes"
 	"io"
+	"os"
+	"errors"
 	"testing"
 )
 
@@ -157,5 +159,32 @@ func TestReader_PanicSafety(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestReader_OpenDirectoryAsFile(t *testing.T) {
+	buf := new(bytes.Buffer)
+	zw := NewWriter(buf)
+	zw.Create("my_dir/") // Создаем директорию
+	zw.Close()
+
+	zr, _ := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	f := zr.File[0]
+	
+	rc, _ := f.Open()
+	defer rc.Close()
+	
+	// Попытка чтения из директории должна вернуть ошибку или EOF
+	_, err := rc.Read(make([]byte, 10))
+	if err == nil {
+		t.Error("expected error when reading from directory reader, got nil")
+	}
+}
+
+func TestFile_OpenNilSafety(t *testing.T) {
+	var f *File
+	_, err := f.Open()
+	if !errors.Is(err, os.ErrInvalid) {
+		t.Errorf("expected ErrInvalid for nil file, got %v", err)
 	}
 }

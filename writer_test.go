@@ -94,6 +94,25 @@ func TestWriter_LongNameError(t *testing.T) {
 		t.Errorf("expected errLongName, got: %v", err)
 	}
 }
+func TestWriter_SetOffsetPanic(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("expected panic when calling SetOffset after writes")
+		}
+	}()
+	w := NewWriter(new(bytes.Buffer))
+	w.Create("test.txt")
+	w.SetOffset(100) // Должно вызвать панику
+}
+
+func TestWriter_LongCommentError(t *testing.T) {
+	w := NewWriter(new(bytes.Buffer))
+	longComment := make([]byte, uint16max + 1)
+	err := w.SetComment(string(longComment))
+	if err == nil {
+		t.Error("expected error for long comment, got nil")
+	}
+}
 
 func TestWriter_AddFS(t *testing.T) {
 	tmp := t.TempDir()
