@@ -9,10 +9,16 @@ It combines the stability of the standard library with the best open-source ZIP 
 ## Features
 
 1. **Drop-in Compatibility:** 100% compatible with the `archive/zip` API. You can safely replace your `archive/zip` imports with `github.com/unxed/zip`.
-2. **High Performance:** Uses the blazing-fast `klauspost/compress` library for `DEFLATE` compression and adds native `Zstandard` (ZSTD) support.
-3. **Multithreaded Archiving & Extraction:** Features a built-in concurrent archiver and extractor (adapted from `fastzip`) that buffers and processes multiple files in parallel. Preserves full Unix/Linux file permissions, symlinks, and ownership.
-4. **In-Place Archiving (Updater):** Modify an existing `.zip` file natively! Append new files or overwrite existing files without decompressing and re-compressing the entire archive.
-5. **Smart Legacy Codepage Auto-Detection:** Sick of extracted ZIP files having gibberish (mojibake) names on Linux or Mac? This library implements the advanced encoding detection algorithm from `7-zip` / `far2l`. It queries your system locale (`LC_ALL` / `kernel32.dll`) and automatically decodes filenames stored in legacy encodings (like `CP866`, `Windows-1251`, `Shift-JIS`, etc.) flawlessly.
+2. **WinZip AES Encryption (AE-2):** Full support for reading and writing AES-encrypted archives (128, 192, and 256-bit).
+3. **Central Directory Encryption (CDE):** The ability to encrypt the archive's metadata (filenames, sizes, etc.), making the list of files invisible without a password.
+4. **Deflate64 Support:** Built-in decoder for the Deflate64 (Method 9) format, commonly used by Windows' built-in archiver for large files.
+5. **High Performance:** Uses the blazing-fast `klauspost/compress` library for `DEFLATE` and adds native `Zstandard` (ZSTD) support.
+6. **Multithreaded Archiving & Extraction:** Concurrent archiver and extractor (adapted from `fastzip`) that processes multiple files in parallel.
+7. **Cross-Platform Metadata:**
+    - **Unix:** Automatic preservation of UID/GID and extended timestamps.
+    - **Windows:** Support for reading and writing NTFS Security Descriptors (ACLs).
+8. **In-Place Archiving (Updater):** Modify existing ZIP files (append/overwrite) without full re-compression.
+9. **Legacy Codepage Auto-Detection:** Advanced encoding detection from `7-zip` / `far2l` to fix "mojibake" in filenames from legacy archives.
 
 ## Usage
 
@@ -59,6 +65,20 @@ defer updater.Close()
 // Overwrite an existing file natively
 w, _ := updater.Append("config.json", zip.APPEND_MODE_OVERWRITE)
 w.Write([]byte(`{"updated": true}`))
+
+### 4. Create an Invisible (CDE) AES-256 Archive
+
+```go
+w, _ := os.Create("stealth.zip")
+zw := zip.NewWriter(w)
+
+// Encrypt the list of files itself!
+zw.SetEncryptCentralDirectory(true, "master-password")
+
+fh := &zip.FileHeader{Name: "secret.txt", Password: "master-password"}
+f, _ := zw.CreateHeader(fh)
+f.Write([]byte("top secret data"))
+zw.Close()
 ```
 
 ## License
