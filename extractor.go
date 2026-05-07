@@ -25,8 +25,10 @@ var bufioWriterPool = sync.Pool{
 type ExtractorOption func(*extractorOptions) error
 
 type extractorOptions struct {
-	concurrency       int
-	chownErrorHandler func(name string, err error) error
+	concurrency          int
+	chownErrorHandler    func(name string, err error) error
+	maxFileSize          int64
+	maxDecompressionRatio int64
 }
 
 func WithExtractorConcurrency(n int) ExtractorOption {
@@ -42,6 +44,19 @@ func WithExtractorConcurrency(n int) ExtractorOption {
 func WithExtractorChownErrorHandler(fn func(name string, err error) error) ExtractorOption {
 	return func(o *extractorOptions) error {
 		o.chownErrorHandler = fn
+		return nil
+	}
+}
+func WithExtractorMaxFileSize(n int64) ExtractorOption {
+	return func(o *extractorOptions) error {
+		o.maxFileSize = n
+		return nil
+	}
+}
+
+func WithExtractorMaxRatio(n int64) ExtractorOption {
+	return func(o *extractorOptions) error {
+		o.maxDecompressionRatio = n
 		return nil
 	}
 }
@@ -84,6 +99,9 @@ func newExtractor(r *Reader, c io.Closer, chroot string, opts []ExtractorOption)
 	}
 
 	e.options.concurrency = runtime.GOMAXPROCS(0)
+	e.options.maxFileSize = 1024 * 1024 * 1024 // 1GB default
+	e.options.maxDecompressionRatio = 200      // 200:1 default
+
 	for _, o := range opts {
 		if err := o(&e.options); err != nil {
 			return nil, err
@@ -233,6 +251,19 @@ func (e *Extractor) createSymlink(path string, file *File) error {
 }
 
 func (e *Extractor) createFile(ctx context.Context, path string, file *File) (err error) {
+	// 1. Предварительная проверка по заголовку
+	if e.options.maxFileSize > 0 && file.UncompressedSize64 > uint64(e.options.maxFileSize) {
+		return fmt.Errorf("zip: file %q size %d exceeds limit %d", file.Name, file.UncompressedSize64, e.options.maxFileSize)
+	}
+
+	if e.options.maxDecompressionRatio > 0 && file.CompressedSize64 > 0 {
+		// Используем умножение вместо деления, чтобы избежать проблем с округлением и нулем
+		if int64(file.UncompressedSize64) > e.options.maxDecompressionRatio*int64(file.CompressedSize64) {
+			ratio := int64(file.UncompressedSize64 / file.CompressedSize64)
+			return fmt.Errorf("zip: file %q suspicious compression ratio %d:1", file.Name, ratio)
+		}
+	}
+
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -252,9 +283,24 @@ func (e *Extractor) createFile(ctx context.Context, path string, file *File) (er
 	bw := bufioWriterPool.Get().(*bufio.Writer)
 	defer bufioWriterPool.Put(bw)
 
+	// Используем LimitedReader для физического ограничения чтения (защита от поддельных заголовков)
+	var lr io.Reader = r
+	if e.options.maxFileSize > 0 {
+		lr = &io.LimitedReader{R: r, N: e.options.maxFileSize}
+	}
+
 	bw.Reset(ctxCountWriter{f, &e.written, ctx})
-	if _, err = bw.ReadFrom(r); err != nil {
+	_, err = bw.ReadFrom(lr)
+	if err != nil {
 		return err
+	}
+
+	// Если мы прочитали все, что позволил лимит, но в основном ридере еще есть данные - это бомба
+	if e.options.maxFileSize > 0 {
+		tmp := make([]byte, 1)
+		if n, _ := r.Read(tmp); n > 0 {
+			return fmt.Errorf("zip: file %q decompression exceeded maxFileSize limit", file.Name)
+		}
 	}
 
 	err = bw.Flush()
