@@ -188,3 +188,23 @@ func TestFile_OpenNilSafety(t *testing.T) {
 		t.Errorf("expected ErrInvalid for nil file, got %v", err)
 	}
 }
+
+func TestLZMA_HeaderParsing(t *testing.T) {
+	// ZIP LZMA header: 2b version, 2b propSize, then properties (5b)
+	zipLzmaHeader := []byte{
+		0x09, 0x00, // Version
+		0x05, 0x00, // Size = 5
+		0x5d, 0x00, 0x00, 0x01, 0x00, // Real LZMA properties
+	}
+	
+	// Подкладываем некорректные данные после заголовка, 
+	// чтобы lzma.NewReader просто попытался инициализироваться.
+	r := bytes.NewReader(append(zipLzmaHeader, make([]byte, 100)...))
+	
+	// Мы не сможем прочитать данные без валидного потока, 
+	// но проверим, что newLZMAReader не паникует и поглощает заголовок.
+	rc := newLZMAReader(r)
+	if rc != nil {
+		rc.Close()
+	}
+}

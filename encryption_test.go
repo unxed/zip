@@ -40,3 +40,17 @@ func TestZipCrypto_Read(t *testing.T) {
 		t.Errorf("ZipCrypto failed: expected %q, got %q", string(data), string(encData))
 	}
 }
+
+func TestWinZipAES_WrongPassword(t *testing.T) {
+	// Имитируем поток с солью и проверкой пароля
+	salt := make([]byte, 8)
+	verif := []byte{0xAA, 0xBB}
+	payload := bytes.NewReader(append(salt, verif...))
+
+	info := &winzipAesInfo{strength: 1} // AES-128
+	_, _, err := newWinZipAesReader(payload, "wrong_pass", info, 100)
+
+	if err == nil || err.Error() != "zip: incorrect password" {
+		t.Errorf("expected 'incorrect password' error, got: %v", err)
+	}
+}
