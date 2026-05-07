@@ -48,6 +48,7 @@ type File struct {
 	zipr         io.ReaderAt
 	headerOffset int64
 	zip64        bool
+	aesInfo      *winzipAesInfo
 }
 
 func OpenReader(name string) (*ReadCloser, error) {
@@ -173,43 +174,53 @@ func (f *File) Open() (io.ReadCloser, error) {
 			return &dirReader{io.EOF}, nil
 		}
 	}
+	
 	size := int64(f.CompressedSize64)
 	encryptionOffset := int64(0)
 	var crypto *zipCrypto
+	
+	// Определяем метод декомпрессии заранее (для AES он может поменяться)
+	method := f.Method
+
+	r := io.NewSectionReader(f.zipr, f.headerOffset+bodyOffset, size)
+	var rr io.Reader = r
+
 	if f.IsEncrypted() {
 		if f.zip.password == nil {
 			return nil, errors.New("zip: file is encrypted but no password provided")
 		}
-		crypto = newZipCrypto([]byte(f.zip.password()))
-		header := make([]byte, 12)
-		if _, err := f.zipr.ReadAt(header, f.headerOffset+bodyOffset); err != nil {
-			return nil, err
-		}
-		crypto.decrypt(header)
+		pass := f.zip.password()
 
-		// Проверка пароля по последнему байту заголовка
-		// В версиях после 2.0 используется старший байт CRC32
-		checkByte := byte(f.CRC32 >> 24)
-		if f.Flags&0x8 != 0 {
-			// Если есть Data Descriptor, используется MS-DOS time
-			checkByte = byte(f.ModifiedTime >> 8)
+		if f.Method == winzipAesExtraID || f.aesInfo != nil {
+			// Случай WinZip AES (Method 99)
+			var err error
+			rr, method, err = newWinZipAesReader(r, pass, f.aesInfo, size)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			// Классический ZipCrypto
+			crypto = newZipCrypto([]byte(pass))
+			header := make([]byte, 12)
+			if _, err := f.zipr.ReadAt(header, f.headerOffset+bodyOffset); err != nil {
+				return nil, err
+			}
+			crypto.decrypt(header)
+			checkByte := byte(f.CRC32 >> 24)
+			if f.Flags&0x8 != 0 {
+				checkByte = byte(f.ModifiedTime >> 8)
+			}
+			if header[11] != checkByte {
+				return nil, errors.New("zip: incorrect password")
+			}
+			encryptionOffset = 12
+			// Сдвигаем базовый ридер для классики
+			r = io.NewSectionReader(f.zipr, f.headerOffset+bodyOffset+encryptionOffset, size-12)
+			rr = &cipherReader{r: r, crypto: crypto}
 		}
-		if header[11] != checkByte {
-			return nil, errors.New("zip: incorrect password")
-		}
-		encryptionOffset = 12
-		size -= 12
 	}
 
-	r := io.NewSectionReader(f.zipr, f.headerOffset+bodyOffset+encryptionOffset, size)
-
-	// Обертка для дешифрования потока
-	var rr io.Reader = r
-	if f.IsEncrypted() {
-		rr = &cipherReader{r: r, crypto: crypto}
-	}
-
-	dcomp := f.zip.decompressor(f.Method)
+	dcomp := f.zip.decompressor(method)
 	if dcomp == nil {
 		return nil, ErrAlgorithm
 	}
@@ -457,6 +468,19 @@ parseExtras:
 			}
 			ts := int64(fieldBuf.uint32())
 			modified = time.Unix(ts, 0)
+		case winzipAesExtraID:
+			if len(fieldBuf) < 7 {
+				continue parseExtras
+			}
+			f.aesInfo = &winzipAesInfo{
+				version:      fieldBuf.uint16(),
+				strength:     fieldBuf.uint8(), // fieldBuf.uint8() сместит указатель
+				actualMethod: 0, // установим ниже
+			}
+			// Пропускаем Vendor ID "AE" (2 байта)
+			fieldBuf.uint16()
+			// Настоящий метод сжатия
+			f.aesInfo.actualMethod = fieldBuf.uint16()
 		}
 	}
 

@@ -54,6 +54,7 @@ const (
 	infoZipUnixExtraID    = 0x5855 // Info-ZIP Unix extension
 	unicodePathExtraID    = 0x7075 // Info-ZIP Unicode Path Extra Field
 	unicodeCommentExtraID = 0x6375 // Info-ZIP Unicode Comment Extra Field
+	winzipAesExtraID      = 0x9901 // WinZip AES encryption extra field
 )
 
 // FileHeader describes a file within a ZIP file.
