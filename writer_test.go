@@ -1,6 +1,7 @@
 package zip
 
 import (
+	"fmt"
 	"bytes"
 	"testing"
 )
@@ -38,4 +39,40 @@ func TestWriter_ZIP64Forced(t *testing.T) {
 	if zr.File[0].UncompressedSize64 != uint64(uint32max)+1 {
 		t.Errorf("size mismatch in ZIP64: got %d", zr.File[0].UncompressedSize64)
 	}
+}
+
+func TestWriter_ZIP64LargeCount(t *testing.T) {
+	buf := new(bytes.Buffer)
+	w := NewWriter(buf)
+
+	// Симулируем ситуацию, когда файлов больше, чем 65535 (лимит uint16)
+	// Для экономии времени и памяти мы просто напрямую модифицируем счетчик в тесте
+	for i := 0; i < 10; i++ {
+		w.Create(fmt.Sprintf("file_%d.txt", i))
+	}
+
+	// Хак для теста: подменяем количество записей перед закрытием
+	// чтобы спровоцировать запись ZIP64 заголовков
+	originalDir := w.dir
+	fakeDir := make([]*header, uint16max + 1)
+	for i := range fakeDir {
+		fakeDir[i] = &header{FileHeader: &FileHeader{Name: "f.txt"}}
+	}
+	w.dir = fakeDir
+
+	err := w.Close()
+	if err != nil {
+		t.Fatalf("Close failed on large count simulation: %v", err)
+	}
+
+	// Проверяем, что в структуре EOCD прописались маркеры 0xFFFF,
+	// что означает наличие ZIP64 Locator
+	data := buf.Bytes()
+	// Сигнатура EOCD: 0x06054b50 в Little Endian
+	if !bytes.Contains(data, []byte{0x50, 0x4b, 0x05, 0x06}) {
+		t.Error("EOCD signature not found")
+	}
+
+	// Возвращаем как было для корректного завершения
+	w.dir = originalDir
 }

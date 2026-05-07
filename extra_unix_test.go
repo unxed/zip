@@ -20,10 +20,12 @@ func TestReadInt(t *testing.T) {
 		b     []byte
 		want  int
 	}{
+		{[]byte{0x05}, 5},
+		{[]byte{0xFF}, 255},
 		{[]byte{0x01, 0x00}, 1},
 		{[]byte{0x01, 0x00, 0x00, 0x00}, 1},
 		{[]byte{0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, 1},
-		{[]byte{0xFF}, 0}, // invalid length
+		{[]byte{0x01, 0x02, 0x03}, 0}, // invalid length (3 bytes)
 	}
 	for _, tc := range cases {
 		if got := readInt(tc.b); got != tc.want {

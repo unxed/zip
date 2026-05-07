@@ -94,6 +94,20 @@ func TestReader_EmptyArchive(t *testing.T) {
 		t.Errorf("expected 0 files, got %d", len(zr.File))
 	}
 }
+func TestReader_UnicodeArchiveComment(t *testing.T) {
+	buf := new(bytes.Buffer)
+	zw := NewWriter(buf)
+	// Комментарий на кириллице для всего архива
+	expected := "Архивный комментарий"
+	zw.SetComment(expected)
+	zw.Close()
+
+	zr, _ := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	// Проверяем, что глобальный комментарий корректно декодирован
+	if zr.Comment != expected {
+		t.Errorf("expected archive comment %q, got %q", expected, zr.Comment)
+	}
+}
 
 func TestReader_PanicSafety(t *testing.T) {
 	// Подача абсолютно случайных данных не должна вызывать панику

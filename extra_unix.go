@@ -52,6 +52,8 @@ func parseUnixExtra(extra []byte) (uid, gid int, ok bool) {
 
 func readInt(b []byte) int {
 	switch len(b) {
+	case 1:
+		return int(b[0])
 	case 2:
 		return int(binary.LittleEndian.Uint16(b))
 	case 4:

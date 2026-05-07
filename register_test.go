@@ -112,6 +112,29 @@ func TestZstd_CorruptedData(t *testing.T) {
 		t.Error("expected decompression error for corrupted ZSTD stream, got nil")
 	}
 }
+func TestZstd_WithDataDescriptor(t *testing.T) {
+	buf := new(bytes.Buffer)
+	zw := NewWriter(buf)
+
+	fh := &FileHeader{
+		Name:   "dd.zstd",
+		Method: ZSTD,
+	}
+	fh.Flags |= 0x8 // Принудительно включаем Data Descriptor
+
+	w, _ := zw.CreateHeader(fh)
+	w.Write([]byte("zstd data with descriptor"))
+	zw.Close()
+
+	zr, _ := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	rc, _ := zr.File[0].Open()
+	data, _ := io.ReadAll(rc)
+	rc.Close()
+
+	if string(data) != "zstd data with descriptor" {
+		t.Errorf("Data mismatch with DD: got %q", string(data))
+	}
+}
 func TestRegister_Panics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
