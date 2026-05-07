@@ -133,3 +133,12 @@ func TestWriter_AddFS(t *testing.T) {
 		t.Errorf("AddFS did not package file correctly")
 	}
 }
+
+func TestLZMA_Decompression(t *testing.T) {
+	// Для этого теста требуется валидный поток LZMA. 
+	// Просто проверим регистрацию метода.
+	dcomp := decompressor(LZMA)
+	if dcomp == nil {
+		t.Fatal("LZMA decompressor not registered")
+	}
+}

@@ -29,6 +29,7 @@ type Reader struct {
 	File          []*File
 	Comment       string
 	decompressors map[uint16]Decompressor
+	password      func() string // Callback для получения пароля
 
 	baseOffset int64
 
@@ -141,6 +142,10 @@ func (r *Reader) decompressor(method uint16) Decompressor {
 	return dcomp
 }
 
+func (r *Reader) SetPassword(password string) {
+	r.password = func() string { return password }
+}
+
 func (rc *ReadCloser) Close() error {
 	return rc.f.Close()
 }
@@ -169,12 +174,46 @@ func (f *File) Open() (io.ReadCloser, error) {
 		}
 	}
 	size := int64(f.CompressedSize64)
-	r := io.NewSectionReader(f.zipr, f.headerOffset+bodyOffset, size)
+	encryptionOffset := int64(0)
+	var crypto *zipCrypto
+	if f.IsEncrypted() {
+		if f.zip.password == nil {
+			return nil, errors.New("zip: file is encrypted but no password provided")
+		}
+		crypto = newZipCrypto([]byte(f.zip.password()))
+		header := make([]byte, 12)
+		if _, err := f.zipr.ReadAt(header, f.headerOffset+bodyOffset); err != nil {
+			return nil, err
+		}
+		crypto.decrypt(header)
+
+		// Проверка пароля по последнему байту заголовка
+		// В версиях после 2.0 используется старший байт CRC32
+		checkByte := byte(f.CRC32 >> 24)
+		if f.Flags&0x8 != 0 {
+			// Если есть Data Descriptor, используется MS-DOS time
+			checkByte = byte(f.ModifiedTime >> 8)
+		}
+		if header[11] != checkByte {
+			return nil, errors.New("zip: incorrect password")
+		}
+		encryptionOffset = 12
+		size -= 12
+	}
+
+	r := io.NewSectionReader(f.zipr, f.headerOffset+bodyOffset+encryptionOffset, size)
+
+	// Обертка для дешифрования потока
+	var rr io.Reader = r
+	if f.IsEncrypted() {
+		rr = &cipherReader{r: r, crypto: crypto}
+	}
+
 	dcomp := f.zip.decompressor(f.Method)
 	if dcomp == nil {
 		return nil, ErrAlgorithm
 	}
-	var rc io.ReadCloser = dcomp(r)
+	var rc io.ReadCloser = dcomp(rr)
 	var desr io.Reader
 	if f.hasDataDescriptor() {
 		desr = io.NewSectionReader(f.zipr, f.headerOffset+bodyOffset+size, dataDescriptorLen)
@@ -200,6 +239,18 @@ func (f *File) OpenRaw() (io.Reader, error) {
 	return r, nil
 }
 
+type cipherReader struct {
+	r      io.Reader
+	crypto *zipCrypto
+}
+
+func (cr *cipherReader) Read(p []byte) (int, error) {
+	n, err := cr.r.Read(p)
+	if n > 0 {
+		cr.crypto.decrypt(p[:n])
+	}
+	return n, err
+}
 type dirReader struct {
 	err error
 }

@@ -4,9 +4,13 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"compress/bzip2"
+	"bytes"
+	"encoding/binary"
 
 	"github.com/klauspost/compress/flate"
 	"github.com/klauspost/compress/zstd"
+	"github.com/ulikunitz/xz/lzma"
 )
 
 type Compressor func(w io.Writer) (io.WriteCloser, error)
@@ -186,9 +190,51 @@ func init() {
 
 	decompressors.Store(Store, Decompressor(io.NopCloser))
 	decompressors.Store(Deflate, Decompressor(newFlateReader))
+	decompressors.Store(BZIP2, Decompressor(func(r io.Reader) io.ReadCloser { return io.NopCloser(bzip2.NewReader(r)) }))
+	decompressors.Store(LZMA, Decompressor(newLZMAReader))
 	decompressors.Store(ZSTD, Decompressor(newZstdReader))
 }
 
+func newLZMAReader(r io.Reader) io.ReadCloser {
+	// APPNOTE 5.8.8: LZMA Properties Header в ZIP:
+	// 2 байта - LZMA Version
+	// 2 байта - Properties Size (обычно 5)
+	// N байт - Properties Data (1 байт параметров + 4 байта размера словаря)
+
+	meta := make([]byte, 4)
+	if _, err := io.ReadFull(r, meta); err != nil {
+		return nil
+	}
+
+	propSize := int(binary.LittleEndian.Uint16(meta[2:4]))
+	if propSize != 5 {
+		// Для ZIP Method 14 по спецификации ожидается 5 байт LZMA1 свойств.
+		return nil
+	}
+
+	props := make([]byte, propSize)
+	if _, err := io.ReadFull(r, props); err != nil {
+		return nil
+	}
+
+	// Библиотека ulikunitz/xz/lzma ожидает классический .lzma заголовок (13 байт):
+	// [1b props][4b dict size][8b uncompressed size]
+	fullHeader := make([]byte, 13)
+	copy(fullHeader[0:5], props)
+	for i := 0; i < 8; i++ {
+		// Указываем 0xFF, что значит "размер неизвестен, читать до EOS маркера"
+		fullHeader[5+i] = 0xFF
+	}
+
+	mr := io.MultiReader(bytes.NewReader(fullHeader), r)
+	rd, err := lzma.NewReader(mr)
+	if err != nil {
+		return nil
+	}
+	// lzma.Reader из этого пакета не реализует Close, так как работает с потоком.
+	// Оборачиваем в NopCloser.
+	return io.NopCloser(rd)
+}
 func RegisterDecompressor(method uint16, dcomp Decompressor) {
 	if _, dup := decompressors.LoadOrStore(method, dcomp); dup {
 		panic("decompressor already registered")

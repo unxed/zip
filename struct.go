@@ -214,6 +214,9 @@ func (h *FileHeader) isZip64() bool {
 func (h *FileHeader) hasDataDescriptor() bool {
 	return h.Flags&0x8 != 0
 }
+func (h *FileHeader) IsEncrypted() bool {
+	return h.Flags&0x1 != 0
+}
 
 func msdosModeToFileMode(m uint32) (mode fs.FileMode) {
 	if m&msdosDir != 0 {
