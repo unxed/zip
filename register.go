@@ -89,45 +89,48 @@ func (r *pooledFlateReader) Close() error {
 }
 
 // ZSTD Pools
-type zstdReader struct {
-	pool *sync.Pool
-	*zstd.Decoder
+var zstdReaderPool sync.Pool
+
+type pooledZstdReader struct {
+	mu  sync.Mutex
+	dec *zstd.Decoder
 }
 
-func (zr *zstdReader) Close() error {
-	err := zr.Decoder.Reset(nil)
-	zr.pool.Put(zr)
+func (r *pooledZstdReader) Read(p []byte) (n int, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.dec == nil {
+		return 0, errors.New("Read after Close")
+	}
+	return r.dec.Read(p)
+}
+
+func (r *pooledZstdReader) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var err error
+	if r.dec != nil {
+		err = r.dec.Reset(nil)
+		zstdReaderPool.Put(r.dec)
+		r.dec = nil
+	}
 	return err
 }
 
 func newZstdReader(r io.Reader) io.ReadCloser {
-	pool := &sync.Pool{}
-	pool.New = func() interface{} {
-		decoder, _ := zstd.NewReader(nil, zstd.WithDecoderLowmem(true), zstd.WithDecoderConcurrency(1))
-		return &zstdReader{pool, decoder}
+	dec, ok := zstdReaderPool.Get().(*zstd.Decoder)
+	if !ok {
+		dec, _ = zstd.NewReader(nil, zstd.WithDecoderLowmem(true), zstd.WithDecoderConcurrency(1))
 	}
-	fr := pool.Get().(*zstdReader)
-	fr.Decoder.Reset(r)
-	return fr
+	dec.Reset(r)
+	return &pooledZstdReader{dec: dec}
 }
 
-func newZstdWriter(w io.Writer) (io.WriteCloser, error) {
-	pool := &sync.Pool{}
-	pool.New = func() interface{} {
-		encoder, _ := zstd.NewWriter(nil, zstd.WithEncoderCRC(false))
-		return encoder
-	}
-	encoder := pool.Get().(*zstd.Encoder)
-	encoder.Reset(w)
-
-	// Create a wrapper that puts the encoder back to the pool
-	return &pooledZstdWriter{pool: pool, enc: encoder}, nil
-}
+var zstdWriterPool sync.Pool
 
 type pooledZstdWriter struct {
-	mu   sync.Mutex
-	pool *sync.Pool
-	enc  *zstd.Encoder
+	mu  sync.Mutex
+	enc *zstd.Encoder
 }
 
 func (pw *pooledZstdWriter) Write(p []byte) (int, error) {
@@ -142,13 +145,22 @@ func (pw *pooledZstdWriter) Write(p []byte) (int, error) {
 func (pw *pooledZstdWriter) Close() error {
 	pw.mu.Lock()
 	defer pw.mu.Unlock()
-	if pw.enc == nil {
-		return nil
+	var err error
+	if pw.enc != nil {
+		err = pw.enc.Close()
+		zstdWriterPool.Put(pw.enc)
+		pw.enc = nil
 	}
-	err := pw.enc.Close()
-	pw.pool.Put(pw.enc)
-	pw.enc = nil
 	return err
+}
+
+func newZstdWriter(w io.Writer) (io.WriteCloser, error) {
+	enc, ok := zstdWriterPool.Get().(*zstd.Encoder)
+	if !ok {
+		enc, _ = zstd.NewWriter(nil, zstd.WithEncoderCRC(false))
+	}
+	enc.Reset(w)
+	return &pooledZstdWriter{enc: enc}, nil
 }
 
 type nopCloser struct {
