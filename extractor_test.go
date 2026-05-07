@@ -197,3 +197,40 @@ func TestExtractor_SymlinkSecurityDeep(t *testing.T) {
 		t.Log("Symlink created pointing to /etc/passwd. Ensure your application handles link targets safely.")
 	}
 }
+func TestExtractor_SymlinkDirectoryTraversal(t *testing.T) {
+	tmp := t.TempDir()
+	zipPath := filepath.Join(tmp, "traversal.zip")
+	dstDir := filepath.Join(tmp, "safe")
+
+	// Директория вне зоны распаковки, куда мы "целимся"
+	trapDir := filepath.Join(tmp, "trap")
+	os.Mkdir(trapDir, 0755)
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+
+	// 1. Создаем симлинк "sub", который указывает на "trap"
+	fh := &FileHeader{Name: "sub"}
+	fh.SetMode(os.ModeSymlink)
+	w, _ := zw.CreateHeader(fh)
+	w.Write([]byte(trapDir))
+
+	// 2. Создаем файл "sub/evil.txt"
+	// Если экстрактор не проверяет, что "sub" - это уже существующий симлинк,
+	// он может записать в trap/evil.txt
+	zw.Create("sub/evil.txt")
+
+	zw.Close()
+	f.Close()
+
+	e, _ := NewExtractor(zipPath, dstDir)
+	err := e.Extract(context.Background())
+
+	// Проверка: файл не должен появиться в trapDir
+	if _, serr := os.Stat(filepath.Join(trapDir, "evil.txt")); serr == nil {
+		t.Errorf("Security Breach! File extracted through symlink into %s", trapDir)
+	}
+
+	// Должна быть ошибка или просто безопасный пропуск
+	_ = err
+}

@@ -299,3 +299,16 @@ func TestUpdater_PhysicalTruncate(t *testing.T) {
 		t.Errorf("file was not truncated! old size %d, new size %d", initialSize, finalInfo.Size())
 	}
 }
+func TestUpdater_NonZipFile(t *testing.T) {
+	tmp := t.TempDir()
+	badFile := filepath.Join(tmp, "not_a_zip.txt")
+	os.WriteFile(badFile, []byte("this is just text"), 0644)
+
+	fRW, _ := os.OpenFile(badFile, os.O_RDWR, 0644)
+	defer fRW.Close()
+
+	_, err := NewUpdater(fRW)
+	if err == nil {
+		t.Error("expected error when opening non-zip file for update, got nil")
+	}
+}
