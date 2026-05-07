@@ -143,8 +143,8 @@ func decodeText(raw []byte, isUTF8Flag bool, packOS byte, packVer uint16, extra 
 		return unicodeText
 	}
 
-	// 2. Bit 11 is set
-	if isUTF8Flag {
+	// 2. Bit 11 is set or OS is Unix-based (always assumes UTF-8)
+	if isUTF8Flag || packOS == creatorUnix || packOS == creatorMacOSX {
 		return string(raw)
 	}
 
