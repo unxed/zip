@@ -59,6 +59,7 @@ func TestDecodeText(t *testing.T) {
 		{"Unix (System/KOI8R)", koi8rRaw, false, creatorUnix, 30, nil, "Привет"},
 		{"Unicode Extra valid", cp866Raw, false, creatorFAT, 10, buildUnicodeExtra(cp866Raw, "Unicode"), "Unicode"},
 		{"Unicode Extra invalid CRC", cp866Raw, false, creatorFAT, 10, buildUnicodeExtra([]byte("garbage"), "Unicode"), "Привет"},
+		{"Unicode Extra invalid UTF-8", cp866Raw, false, creatorFAT, 10, buildUnicodeExtra(cp866Raw, string([]byte{0xff, 0xfe, 0xfd})), "Привет"},
 		{"Step 4: FAT 25-40 (OEM)", cp866Raw, false, creatorFAT, 25, nil, "Привет"},
 		{"Step 6: Unix fallback (System)", koi8rRaw, false, creatorUnix, 30, nil, "Привет"},
 	}

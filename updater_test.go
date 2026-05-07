@@ -131,6 +131,41 @@ func TestUpdater_RemoveFirstFile(t *testing.T) {
 		t.Fatalf("expected 2 files, got %d", len(zr.File))
 	}
 }
+func TestUpdater_LargeDataShift(t *testing.T) {
+	// bufferSize in updater.go is 1MB. Let's create a 2MB file and replace a small file before it.
+	tempDir := t.TempDir()
+	zipPath := filepath.Join(tempDir, "largeshift.zip")
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+
+	// File 1: small
+	w1, _ := zw.Create("small.txt")
+	w1.Write([]byte("small"))
+
+	// File 2: > 1MB
+	w2, _ := zw.Create("large.bin")
+	largeData := make([]byte, 1024*1024*2) // 2MB
+	w2.Write(largeData)
+
+	zw.Close()
+	f.Close()
+
+	// Replace "small.txt" with something else of different size to force shift of 2MB
+	fRW, _ := os.OpenFile(zipPath, os.O_RDWR, 0644)
+	u, _ := NewUpdater(fRW)
+	w, _ := u.Append("small.txt", APPEND_MODE_OVERWRITE)
+	w.Write([]byte("now-larger-than-before"))
+	u.Close()
+	fRW.Close()
+
+	// Verify
+	zr, _ := OpenReader(zipPath)
+	defer zr.Close()
+	if len(zr.File) != 2 {
+		t.Errorf("expected 2 files, got %d", len(zr.File))
+	}
+}
 func TestUpdater_SameSize(t *testing.T) {
 	tempDir := t.TempDir()
 	zipPath := filepath.Join(tempDir, "samesize.zip")

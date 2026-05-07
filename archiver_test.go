@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"bytes"
+	"strings"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -100,5 +101,31 @@ func TestArchiverAndExtractor(t *testing.T) {
 		} else if target != "file1.txt" {
 			t.Errorf("symlink target mismatch. Expected 'file1.txt', got %q", target)
 		}
+	}
+}
+
+func TestArchiver_ChrootViolation(t *testing.T) {
+	tmp := t.TempDir()
+	chroot := filepath.Join(tmp, "inside")
+	os.Mkdir(chroot, 0755)
+
+	outsideFile := filepath.Join(tmp, "outside.txt")
+	os.WriteFile(outsideFile, []byte("danger"), 0644)
+
+	f, _ := os.Create(filepath.Join(tmp, "test.zip"))
+	defer f.Close()
+
+	a, _ := NewArchiver(f, chroot)
+	files := map[string]os.FileInfo{
+		outsideFile: nil, // This should trigger the prefix check
+	}
+
+	// We need a real FileInfo for the check
+	info, _ := os.Stat(outsideFile)
+	files[outsideFile] = info
+
+	err := a.Archive(context.Background(), files)
+	if err == nil || !strings.Contains(err.Error(), "outside of chroot") {
+		t.Errorf("expected chroot violation error, got: %v", err)
 	}
 }
