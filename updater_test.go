@@ -218,3 +218,27 @@ func TestUpdater_ReplaceLastFile(t *testing.T) {
 		t.Fatalf("expected 2 files, got %d", len(zr.File))
 	}
 }
+
+func TestUpdater_DuplicateHeaderError(t *testing.T) {
+	tmp := t.TempDir()
+	zipPath := filepath.Join(tmp, "dup.zip")
+	
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	zw.Create("file.txt")
+	zw.Close()
+	f.Close()
+
+	fRW, _ := os.OpenFile(zipPath, os.O_RDWR, 0644)
+	u, _ := NewUpdater(fRW)
+	defer fRW.Close()
+
+	fh := &FileHeader{Name: "new.txt"}
+	u.AppendHeader(fh, APPEND_MODE_KEEP_ORIGINAL)
+	
+	// Попытка добавить ТОТ ЖЕ заголовок второй раз без закрытия стрима
+	_, err := u.AppendHeader(fh, APPEND_MODE_KEEP_ORIGINAL)
+	if err == nil {
+		t.Error("expected error when appending duplicate FileHeader object, got nil")
+	}
+}

@@ -75,3 +75,21 @@ func TestZstdConcurrencyStress(t *testing.T) {
 		t.Errorf("stress test failed: %v", err)
 	}
 }
+func TestRegister_Panics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("expected panic when registering duplicate method")
+		}
+	}()
+	// Метод 8 (Deflate) уже зарегистрирован в init()
+	RegisterCompressor(Deflate, nil)
+}
+
+func TestDecompressor_Panics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("expected panic when registering duplicate decompressor")
+		}
+	}()
+	RegisterDecompressor(Deflate, nil)
+}

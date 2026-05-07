@@ -73,6 +73,26 @@ func TestDecodeText(t *testing.T) {
 		})
 	}
 }
+func TestInitSystemLocales(t *testing.T) {
+	// Сохраняем оригинальные декодеры
+	origOEM := OEMDecoder
+	origANSI := ANSIDecoder
+	defer func() {
+		OEMDecoder = origOEM
+		ANSIDecoder = origANSI
+	}()
+
+	// Тестируем русскую локаль (CP866/Win1251)
+	t.Setenv("LC_ALL", "ru_RU.UTF-8")
+	initSystemLocales()
+
+	// Проверяем, что декодеры изменились (сравнение через Bytes)
+	testStr := []byte{0x8f} // 'П' в CP866
+	res, _ := OEMDecoder.Bytes(testStr)
+	if string(res) != "П" {
+		t.Errorf("expected CP866 decoder after setting ru_RU locale, got %s", string(res))
+	}
+}
 
 func TestParseUnicodeExtraField_Malformed(t *testing.T) {
 	// Test short extra field

@@ -2,6 +2,7 @@ package zip
 
 import (
 	"context"
+	"time"
 	"os"
 	"bytes"
 	"strings"
@@ -129,3 +130,44 @@ func TestArchiver_ChrootViolation(t *testing.T) {
 		t.Errorf("expected chroot violation error, got: %v", err)
 	}
 }
+func TestArchiver_SkipIrregularFiles(t *testing.T) {
+	tmp := t.TempDir()
+	fPath := filepath.Join(tmp, "normal.txt")
+	os.WriteFile(fPath, []byte("data"), 0644)
+
+	zipF, _ := os.Create(filepath.Join(tmp, "out.zip"))
+	defer zipF.Close()
+
+	a, _ := NewArchiver(zipF, tmp)
+
+	// Симулируем FileInfo для сокета (нерегулярный файл)
+	files := make(map[string]os.FileInfo)
+	info, _ := os.Stat(fPath)
+	files[fPath] = info
+
+	// Добавляем файл с модом сокета вручную (FileInfo это интерфейс)
+	files["/tmp/socket"] = mockFileInfo{name: "socket", mode: os.ModeSocket}
+
+	err := a.Archive(context.Background(), files)
+	if err != nil {
+		t.Fatalf("archiver failed: %v", err)
+	}
+
+	// Проверяем, что в архиве только 1 файл (сокет пропущен)
+	a.Close()
+	zr, _ := OpenReader(zipF.Name())
+	if len(zr.File) != 1 {
+		t.Errorf("expected 1 file (socket should be skipped), got %d", len(zr.File))
+	}
+}
+
+type mockFileInfo struct {
+	name string
+	mode os.FileMode
+}
+func (m mockFileInfo) Name() string { return m.name }
+func (m mockFileInfo) Size() int64 { return 0 }
+func (m mockFileInfo) Mode() os.FileMode { return m.mode }
+func (m mockFileInfo) ModTime() time.Time { return time.Now() }
+func (m mockFileInfo) IsDir() bool { return m.mode.IsDir() }
+func (m mockFileInfo) Sys() interface{} { return nil }
