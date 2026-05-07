@@ -75,6 +75,43 @@ func TestZstdConcurrencyStress(t *testing.T) {
 		t.Errorf("stress test failed: %v", err)
 	}
 }
+func TestZstd_CorruptedData(t *testing.T) {
+	data := []byte("some data to compress and then corrupt it")
+	buf := new(bytes.Buffer)
+	zw := NewWriter(buf)
+	w, _ := zw.CreateHeader(&FileHeader{Name: "bad.zstd", Method: ZSTD})
+	w.Write(data)
+	zw.Close()
+
+	raw := buf.Bytes()
+	zr, err := NewReader(bytes.NewReader(raw), int64(len(raw)))
+	if err != nil {
+		t.Fatalf("failed to read valid zip: %v", err)
+	}
+
+	// Находим точное смещение начала сжатых данных
+	offset, err := zr.File[0].DataOffset()
+	if err != nil {
+		t.Fatalf("failed to get data offset: %v", err)
+	}
+
+	// Портим именно сжатые данные, не трогая заголовки
+	for i := offset; i < offset+5 && i < int64(len(raw)); i++ {
+		raw[i] = 0xAA
+	}
+
+	rc, err := zr.File[0].Open()
+	if err != nil {
+		// Ошибка может возникнуть уже здесь при инициализации декомпрессора
+		return
+	}
+	defer rc.Close()
+
+	_, err = io.ReadAll(rc)
+	if err == nil {
+		t.Error("expected decompression error for corrupted ZSTD stream, got nil")
+	}
+}
 func TestRegister_Panics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {

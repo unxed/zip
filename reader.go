@@ -154,6 +154,9 @@ func (f *File) DataOffset() (offset int64, err error) {
 }
 
 func (f *File) Open() (io.ReadCloser, error) {
+	if f == nil || f.zipr == nil {
+		return nil, os.ErrInvalid
+	}
 	bodyOffset, err := f.findBodyOffset()
 	if err != nil {
 		return nil, err
@@ -186,6 +189,9 @@ func (f *File) Open() (io.ReadCloser, error) {
 }
 
 func (f *File) OpenRaw() (io.Reader, error) {
+	if f == nil || f.zipr == nil {
+		return nil, os.ErrInvalid
+	}
 	bodyOffset, err := f.findBodyOffset()
 	if err != nil {
 		return nil, err
@@ -496,6 +502,10 @@ func readDirectoryEnd(r io.ReaderAt, size int64) (dir *directoryEnd, baseOffset 
 
 	baseOffset = directoryEndOffset - int64(d.directorySize) - int64(d.directoryOffset)
 
+	if baseOffset < 0 {
+		return nil, 0, ErrFormat
+	}
+
 	if o := baseOffset + int64(d.directoryOffset); o < 0 || o >= size {
 		return nil, 0, ErrFormat
 	}
@@ -596,6 +606,10 @@ func (b *readBuf) uint64() uint64 {
 }
 
 func (b *readBuf) sub(n int) readBuf {
+	if n < 0 || n > len(*b) {
+		*b = (*b)[len(*b):]
+		return nil
+	}
 	b2 := (*b)[:n]
 	*b = (*b)[n:]
 	return b2

@@ -118,11 +118,13 @@ func (r *pooledZstdReader) Close() error {
 }
 
 func newZstdReader(r io.Reader) io.ReadCloser {
-	dec, ok := zstdReaderPool.Get().(*zstd.Decoder)
-	if !ok {
+	dec, _ := zstdReaderPool.Get().(*zstd.Decoder)
+	if dec == nil {
 		dec, _ = zstd.NewReader(nil, zstd.WithDecoderLowmem(true), zstd.WithDecoderConcurrency(1))
 	}
-	dec.Reset(r)
+	if dec != nil {
+		dec.Reset(r)
+	}
 	return &pooledZstdReader{dec: dec}
 }
 
@@ -155,9 +157,12 @@ func (pw *pooledZstdWriter) Close() error {
 }
 
 func newZstdWriter(w io.Writer) (io.WriteCloser, error) {
-	enc, ok := zstdWriterPool.Get().(*zstd.Encoder)
-	if !ok {
+	enc, _ := zstdWriterPool.Get().(*zstd.Encoder)
+	if enc == nil {
 		enc, _ = zstd.NewWriter(nil, zstd.WithEncoderCRC(false))
+	}
+	if enc == nil {
+		return nil, errors.New("zip: zstd encoder initialization failed")
 	}
 	enc.Reset(w)
 	return &pooledZstdWriter{enc: enc}, nil

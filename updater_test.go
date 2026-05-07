@@ -312,3 +312,62 @@ func TestUpdater_NonZipFile(t *testing.T) {
 		t.Error("expected error when opening non-zip file for update, got nil")
 	}
 }
+func TestUpdater_WithPrefixStub(t *testing.T) {
+	tmp := t.TempDir()
+	zipPath := filepath.Join(tmp, "stub.exe")
+
+	// 1. Создаем файл с префиксом (имитация SFX-архива)
+	f, _ := os.Create(zipPath)
+	stub := []byte("#!/bin/bash\necho SFX\n") // Точно 21 байт
+	f.Write(stub)
+	
+	zw := NewWriter(f)
+	// SetOffset сообщает ZIP-писателю, что логическое начало данных — после префикса.
+	zw.SetOffset(int64(len(stub)))
+	w, _ := zw.Create("internal.txt")
+	w.Write([]byte("inside zip"))
+	zw.Close()
+	f.Close()
+
+	// 2. Обновляем этот файл через Updater
+	fRW, _ := os.OpenFile(zipPath, os.O_RDWR, 0644)
+	u, err := NewUpdater(fRW)
+	if err != nil {
+		t.Fatalf("failed to open updater: %v", err)
+	}
+	
+	// Если ZIP создавался с SetOffset, внутренние смещения уже включают размер префикса.
+	// В этом случае расчетный baseOffset для читателя будет 0. Оба варианта (0 и 21) валидны.
+	if u.baseOffset != 0 && u.baseOffset != int64(len(stub)) {
+		t.Errorf("unexpected baseOffset: got %d", u.baseOffset)
+	}
+
+	w2, _ := u.Append("new.txt", APPEND_MODE_KEEP_ORIGINAL)
+	w2.Write([]byte("added later"))
+	u.Close()
+	fRW.Close()
+
+	// 3. Проверяем, что префикс на месте и данные читаются
+	zr, err := OpenReader(zipPath)
+	if err != nil {
+		t.Fatalf("failed to open updated sfx: %v", err)
+	}
+	// При использовании SetOffset писатель создает абсолютные смещения.
+	// Reader это обнаруживает и устанавливает baseOffset в 0. Это корректно.
+	if zr.baseOffset != 0 && zr.baseOffset != int64(len(stub)) {
+		t.Errorf("Reader reported unexpected baseOffset: got %d", zr.baseOffset)
+	}
+	if len(zr.File) != 2 {
+		t.Errorf("expected 2 files, got %d", len(zr.File))
+	}
+	zr.Close()
+
+	// Проверяем физическое начало файла
+	head := make([]byte, 11)
+	fRead, _ := os.Open(zipPath)
+	fRead.Read(head)
+	fRead.Close()
+	if string(head) != "#!/bin/bash" {
+		t.Errorf("Prefix stub corrupted! got %q", string(head))
+	}
+}
