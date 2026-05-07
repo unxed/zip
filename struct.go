@@ -79,6 +79,8 @@ type FileHeader struct {
 	Flags              uint16
 	Method             uint16
 	Modified           time.Time
+	Accessed           time.Time
+	Created            time.Time
 	ModifiedTime       uint16 // Deprecated
 	ModifiedDate       uint16 // Deprecated
 	CRC32              uint32

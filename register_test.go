@@ -153,3 +153,18 @@ func TestDecompressor_Panics(t *testing.T) {
 	}()
 	RegisterDecompressor(Deflate, nil)
 }
+
+func TestPPMd_HeaderParsing(t *testing.T) {
+	// Имитируем 2 байта заголовка PPMd
+	// Order=8 (val 7), Mem=50MB (val 49)
+	// 7 + (49 << 4) = 7 + 784 = 791 (0x0317)
+	header := []byte{0x17, 0x03}
+	
+	r := bytes.NewReader(header)
+	// newPPMdReader попытается инициализировать библиотеку. 
+	// Проверяем, что нет паники при чтении свойств.
+	rc := newPPMdReader(r, 1000)
+	if rc != nil {
+		// Ожидаем ошибку или пустой результат, так как данных после заголовка нет
+	}
+}

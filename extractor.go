@@ -310,7 +310,11 @@ func (e *Extractor) createFile(ctx context.Context, path string, file *File) (er
 }
 
 func (e *Extractor) updateFileMetadata(path string, file *File) error {
-	if err := lchtimes(path, file.Mode(), time.Now(), file.Modified); err != nil {
+	atime := time.Now()
+	if !file.Accessed.IsZero() {
+		atime = file.Accessed
+	}
+	if err := lchtimes(path, file.Mode(), atime, file.Modified); err != nil {
 		return err
 	}
 

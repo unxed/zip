@@ -256,11 +256,16 @@ func (f *File) Open() (io.ReadCloser, error) {
 		}
 	}
 
-	dcomp := f.zip.decompressor(method)
-	if dcomp == nil {
-		return nil, ErrAlgorithm
+	var rc io.ReadCloser
+	if method == 98 { // PPMd
+		rc = newPPMdReader(rr, f.UncompressedSize64)
+	} else {
+		dcomp := f.zip.decompressor(method)
+		if dcomp == nil {
+			return nil, ErrAlgorithm
+		}
+		rc = dcomp(rr)
 	}
-	var rc io.ReadCloser = dcomp(rr)
 	var desr io.Reader
 	if f.hasDataDescriptor() {
 		desr = io.NewSectionReader(f.zipr, f.headerOffset+bodyOffset+size, dataDescriptorLen)
@@ -472,7 +477,7 @@ parseExtras:
 			if len(fieldBuf) < 4 {
 				continue parseExtras
 			}
-			fieldBuf.uint32()
+			fieldBuf.uint32() // Reserved
 			for len(fieldBuf) >= 4 {
 				attrTag := fieldBuf.uint16()
 				attrSize := int(fieldBuf.uint16())
@@ -485,11 +490,16 @@ parseExtras:
 				}
 
 				const ticksPerSecond = 1e7
-				ts := int64(attrBuf.uint64())
-				secs := ts / ticksPerSecond
-				nsecs := (1e9 / ticksPerSecond) * (ts % ticksPerSecond)
-				epoch := time.Date(1601, time.January, 1, 0, 0, 0, 0, time.UTC)
-				modified = time.Unix(epoch.Unix()+secs, nsecs)
+				epoch := time.Date(1601, time.January, 1, 0, 0, 0, 0, time.UTC).Unix()
+
+				parseNTFS := func(b *readBuf) time.Time {
+					t := int64(b.uint64())
+					return time.Unix(epoch+(t/ticksPerSecond), (t%ticksPerSecond)*100)
+				}
+
+				modified = parseNTFS(&attrBuf)
+				f.Accessed = parseNTFS(&attrBuf)
+				f.Created = parseNTFS(&attrBuf)
 			}
 		case unixExtraID, infoZipUnixExtraID:
 			if len(fieldBuf) < 8 {
@@ -499,11 +509,19 @@ parseExtras:
 			ts := int64(fieldBuf.uint32())
 			modified = time.Unix(ts, 0)
 		case extTimeExtraID:
-			if len(fieldBuf) < 5 || fieldBuf.uint8()&1 == 0 {
+			if len(fieldBuf) < 1 {
 				continue parseExtras
 			}
-			ts := int64(fieldBuf.uint32())
-			modified = time.Unix(ts, 0)
+			flags := fieldBuf.uint8()
+			if flags&1 != 0 && len(fieldBuf) >= 4 {
+				modified = time.Unix(int64(fieldBuf.uint32()), 0)
+			}
+			if flags&2 != 0 && len(fieldBuf) >= 4 {
+				f.Accessed = time.Unix(int64(fieldBuf.uint32()), 0)
+			}
+			if flags&4 != 0 && len(fieldBuf) >= 4 {
+				f.Created = time.Unix(int64(fieldBuf.uint32()), 0)
+			}
 		case winzipAesExtraID:
 			if len(fieldBuf) < 7 {
 				continue parseExtras

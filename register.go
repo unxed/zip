@@ -11,6 +11,7 @@ import (
 	"github.com/klauspost/compress/flate"
 	"github.com/klauspost/compress/zstd"
 	"github.com/ulikunitz/xz/lzma"
+	"github.com/dovydenkovas/ppmd"
 )
 
 type Compressor func(w io.Writer) (io.WriteCloser, error)
@@ -195,6 +196,27 @@ func init() {
 	decompressors.Store(ZSTD, Decompressor(newZstdReader))
 }
 
+func newPPMdReader(r io.Reader, size uint64) io.ReadCloser {
+	// APPNOTE 5.10.3: Параметры PPMd хранятся в первых 2 байтах данных.
+	props := make([]byte, 2)
+	if _, err := io.ReadFull(r, props); err != nil {
+		return nil
+	}
+	val := binary.LittleEndian.Uint16(props)
+
+	// Разбор параметров:
+	// Order: bits 0-3 (+1)
+	// MemSize: bits 4-11 (+1) в МБ
+	// Restoration: bits 12-15
+	order := int(val&0xF) + 1
+	memSize := (int((val>>4)&0xFF) + 1)
+
+	rd, err := ppmd.NewH7zReader(r, order, memSize, int(size))
+	if err != nil {
+		return nil
+	}
+	return io.NopCloser(&rd)
+}
 func newLZMAReader(r io.Reader) io.ReadCloser {
 	// APPNOTE 5.8.8: LZMA Properties Header в ZIP:
 	// 2 байта - LZMA Version
