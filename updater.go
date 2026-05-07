@@ -224,7 +224,7 @@ func (u *Updater) AppendHeader(fh *FileHeader, mode AppendMode) (io.Writer, erro
 		offset = u.dirOffset
 	}
 	if existingDirIndex >= 0 {
-		if offset, err = u.removeFile(existingDirIndex); err != nil {
+		if offset, err = u.RemoveFile(existingDirIndex); err != nil {
 			return nil, err
 		}
 		u.dirOffset = offset
@@ -319,7 +319,7 @@ func (u *Updater) AppendHeader(fh *FileHeader, mode AppendMode) (io.Writer, erro
 	return ow, nil
 }
 
-func (u *Updater) removeFile(dirIndex int) (int64, error) {
+func (u *Updater) RemoveFile(dirIndex int) (int64, error) {
 	var start = int64(u.dir[dirIndex].offset)
 	var end int64
 	if dirIndex == len(u.dir)-1 {
@@ -364,6 +364,14 @@ func (u *Updater) removeFile(dirIndex int) (int64, error) {
 		u.dir[i].offset -= uint64(size)
 	}
 	return wp, nil
+}
+
+func (u *Updater) Entries() []*FileHeader {
+	res := make([]*FileHeader, len(u.dir))
+	for i, h := range u.dir {
+		res[i] = h.FileHeader
+	}
+	return res
 }
 
 func (u *Updater) compressor(method uint16) Compressor {
