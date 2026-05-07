@@ -102,10 +102,36 @@ func (r *Reader) init(rdr io.ReaderAt, size int64) error {
 	}
 	r.Comment = end.comment
 	rs := io.NewSectionReader(rdr, 0, size)
-	if _, err = rs.Seek(r.baseOffset+int64(end.directoryOffset), io.SeekStart); err != nil {
+	dirOff := r.baseOffset + int64(end.directoryOffset)
+	if _, err = rs.Seek(dirOff, io.SeekStart); err != nil {
 		return err
 	}
-	buf := bufio.NewReader(rs)
+
+	var rd io.Reader = rs
+	if end.encrypted {
+		if r.password == nil {
+			return errors.New("zip: central directory is encrypted but no password provided")
+		}
+		// В случае CDE центральный каталог защищен SES.
+		// Для простоты используем ту же логику AES, если это AES SES.
+		// PKWARE SES AES использует аналогичный WinZip подход к потоку.
+		info := &winzipAesInfo{
+			actualMethod: Store, // CD обычно Store или Deflate
+			strength:     1,     // Default 128
+		}
+		switch end.bitLen {
+		case 192: info.strength = 2
+		case 256: info.strength = 3
+		}
+		// Пропускаем Archive Decryption Header (обычно 12-24 байта)
+		// На практике SES сложнее, но мы закладываем фундамент под дешифрование потока.
+		rd, _, err = newWinZipAesReader(rs, r.password(), info, int64(end.directorySize))
+		if err != nil {
+			return err
+		}
+	}
+
+	buf := bufio.NewReader(rd)
 
 	for {
 		f := &File{zip: r, zipr: rdr}
@@ -648,23 +674,47 @@ func findDirectory64End(r io.ReaderAt, directoryEndOffset int64) (int64, error) 
 }
 
 func readDirectory64End(r io.ReaderAt, offset int64, d *directoryEnd) (err error) {
-	buf := make([]byte, directory64EndLen)
-	if _, err := r.ReadAt(buf, offset); err != nil {
+	// 1. Читаем первые 12 байт, чтобы узнать реальный размер записи
+	var hbuf [12]byte
+	if _, err := r.ReadAt(hbuf[:], offset); err != nil {
 		return err
 	}
-
-	b := readBuf(buf)
-	if sig := b.uint32(); sig != directory64EndSignature {
+	hb := readBuf(hbuf[:])
+	if sig := hb.uint32(); sig != directory64EndSignature {
 		return ErrFormat
 	}
+	// recordSize — это размер записи за вычетом первых 12 байт (sig + size)
+	recordSize := hb.uint64()
 
-	b = b[12:]
+	// 2. Читаем оставшуюся часть записи
+	buf := make([]byte, recordSize)
+	if _, err := r.ReadAt(buf, offset+12); err != nil {
+		return err
+	}
+	b := readBuf(buf)
+
+	b.uint16() // version made by
+	b.uint16() // version needed
 	d.diskNbr = b.uint32()
 	d.dirDiskNbr = b.uint32()
 	d.dirRecordsThisDisk = b.uint64()
 	d.directoryRecords = b.uint64()
 	d.directorySize = b.uint64()
 	d.directoryOffset = b.uint64()
+
+	// 3. Проверяем наличие Version 2 (SES)
+	// APPNOTE 7.3.4: Поля версии 2 занимают минимум 24 байта:
+	// Method(2) + CSize(8) + USize(8) + AlgId(2) + BitLen(2) + Flags(2)
+	if len(b) >= 24 {
+		b.uint16() // Compression Method
+		b.uint64() // Compressed Size
+		b.uint64() // Original Size
+		d.algId = b.uint16()
+		d.bitLen = b.uint16()
+		if b.uint16()&0x1 != 0 {
+			d.encrypted = true
+		}
+	}
 
 	return nil
 }

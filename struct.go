@@ -58,6 +58,16 @@ const (
 	unicodeCommentExtraID = 0x6375 // Info-ZIP Unicode Comment Extra Field
 	winzipAesExtraID      = 0x9901 // WinZip AES encryption extra field
 )
+const (
+	// Strong Encryption (SES) Algorithm IDs
+	sesDES    = 0x6601
+	sesRC2old = 0x6602
+	ses3DES168 = 0x6603
+	ses3DES112 = 0x6609
+	sesAES128  = 0x660E
+	sesAES192  = 0x660F
+	sesAES256  = 0x6610
+)
 
 // FileHeader describes a file within a ZIP file.
 type FileHeader struct {
@@ -128,6 +138,11 @@ type directoryEnd struct {
 	directoryOffset    uint64
 	commentLen         uint16
 	comment            string
+	
+	// SES (Strong Encryption) fields
+	encrypted          bool
+	algId              uint16
+	bitLen             uint16
 }
 
 func timeZone(offset time.Duration) *time.Location {
