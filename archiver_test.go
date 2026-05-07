@@ -3,6 +3,8 @@ package zip
 import (
 	"context"
 	"time"
+	"fmt"
+	"errors"
 	"os"
 	"bytes"
 	"strings"
@@ -200,6 +202,61 @@ func TestArchiver_EmptyEntries(t *testing.T) {
 	}
 	if !foundFile || !foundDir {
 		t.Errorf("archiver missed empty entries: file=%v, dir=%v", foundFile, foundDir)
+	}
+}
+func TestArchiver_ZstdParallel(t *testing.T) {
+	tmp := t.TempDir()
+	srcDir := filepath.Join(tmp, "src")
+	os.Mkdir(srcDir, 0755)
+
+	// Генерируем много файлов для параллельной работы
+	filesMap := make(map[string]os.FileInfo)
+	for i := 0; i < 20; i++ {
+		p := filepath.Join(srcDir, fmt.Sprintf("file_%d.bin", i))
+		os.WriteFile(p, make([]byte, 1024), 0644)
+		info, _ := os.Stat(p)
+		filesMap[p] = info
+	}
+
+	zipF, _ := os.Create(filepath.Join(tmp, "zstd_para.zip"))
+	defer zipF.Close()
+
+	// Используем ZSTD в параллельном режиме
+	a, _ := NewArchiver(zipF, srcDir, WithArchiverMethod(ZSTD), WithArchiverConcurrency(4))
+	if err := a.Archive(context.Background(), filesMap); err != nil {
+		t.Fatalf("parallel ZSTD archive failed: %v", err)
+	}
+	a.Close()
+
+	// Проверяем, что файлы читаются
+	zr, _ := OpenReader(zipF.Name())
+	defer zr.Close()
+	if len(zr.File) != 20 || zr.File[0].Method != ZSTD {
+		t.Errorf("ZSTD parallel archive error: count=%d, method=%d", len(zr.File), zr.File[0].Method)
+	}
+}
+
+func TestArchiver_ContextCancellation(t *testing.T) {
+	tmp := t.TempDir()
+	srcDir := filepath.Join(tmp, "src")
+	os.Mkdir(srcDir, 0755)
+
+	p := filepath.Join(srcDir, "large.bin")
+	os.WriteFile(p, make([]byte, 1024*1024), 0644)
+	info, _ := os.Stat(p)
+
+	zipF, _ := os.Create(filepath.Join(tmp, "cancel.zip"))
+	defer zipF.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	a, _ := NewArchiver(zipF, srcDir)
+
+	// Отменяем сразу
+	cancel()
+
+	err := a.Archive(ctx, map[string]os.FileInfo{p: info})
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got: %v", err)
 	}
 }
 

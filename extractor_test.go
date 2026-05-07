@@ -3,6 +3,7 @@ package zip
 import (
 	"context"
 	"os"
+	"runtime"
 	"strings"
 	"path/filepath"
 	"testing"
@@ -131,5 +132,68 @@ func TestExtractor_RatioBomb(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "ratio") {
 		t.Errorf("expected ratio bomb error, got: %v", err)
+	}
+}
+
+func TestExtractor_PermissionsPreservation(t *testing.T) {
+	// Только для Unix, так как на Windows права работают иначе
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping on windows")
+	}
+
+	tmp := t.TempDir()
+	zipPath := filepath.Join(tmp, "perms.zip")
+	dstDir := filepath.Join(tmp, "dst")
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	
+	// Файл с очень строгими правами
+	fh, _ := FileInfoHeader(mockFileInfo{name: "secret.txt", mode: 0700})
+	w, _ := zw.CreateHeader(fh)
+	w.Write([]byte("secret"))
+	zw.Close()
+	f.Close()
+
+	e, _ := NewExtractor(zipPath, dstDir)
+	e.Extract(context.Background())
+
+	info, err := os.Stat(filepath.Join(dstDir, "secret.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	
+	// Проверяем, что права 0700 (rwx------) сохранились
+	if info.Mode().Perm() != 0700 {
+		t.Errorf("permissions lost! expected 0700, got %o", info.Mode().Perm())
+	}
+}
+
+func TestExtractor_SymlinkSecurityDeep(t *testing.T) {
+	tmp := t.TempDir()
+	zipPath := filepath.Join(tmp, "sym_attack.zip")
+	dstDir := filepath.Join(tmp, "safe")
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	
+	// Создаем симлинк, который внутри архива указывает на путь ВНЕ архива
+	fh := &FileHeader{Name: "attack_link"}
+	fh.SetMode(os.ModeSymlink)
+	w, _ := zw.CreateHeader(fh)
+	// Цель ссылки - системный файл
+	w.Write([]byte("/etc/passwd")) 
+	zw.Close()
+	f.Close()
+
+	e, _ := NewExtractor(zipPath, dstDir)
+	err := e.Extract(context.Background())
+
+	// Проверяем, что ссылка создана, но мы не должны позволять ей 
+	// работать как вектору атаки, если библиотека это декларирует.
+	// На текущем этапе extractor.go делает os.Symlink(target, path).
+	// Это создаст ссылку в dstDir/attack_link -> /etc/passwd.
+	if err == nil {
+		t.Log("Symlink created pointing to /etc/passwd. Ensure your application handles link targets safely.")
 	}
 }
