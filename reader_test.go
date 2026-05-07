@@ -2,6 +2,7 @@ package zip
 
 import (
 	"bytes"
+	"encoding/binary"
 	"io"
 	"os"
 	"errors"
@@ -186,6 +187,36 @@ func TestFile_OpenNilSafety(t *testing.T) {
 	_, err := f.Open()
 	if !errors.Is(err, os.ErrInvalid) {
 		t.Errorf("expected ErrInvalid for nil file, got %v", err)
+	}
+}
+func TestReader_Zip64DataDescriptor(t *testing.T) {
+	// Имитируем ZIP64 Data Descriptor с сигнатурой
+	// [Sig 4b] [CRC 4b] [Comp 8b] [Uncomp 8b] = 24 bytes
+	desc := new(bytes.Buffer)
+	binary.Write(desc, binary.LittleEndian, uint32(dataDescriptorSignature))
+	binary.Write(desc, binary.LittleEndian, uint32(0x12345678)) // CRC
+	binary.Write(desc, binary.LittleEndian, uint64(1000))       // Comp
+	binary.Write(desc, binary.LittleEndian, uint64(2000))       // Uncomp
+
+	f := &File{
+		FileHeader: FileHeader{CRC32: 0x12345678},
+		zip64:      true,
+	}
+
+	err := readDataDescriptor(desc, f)
+	if err != nil {
+		t.Errorf("failed to read ZIP64 data descriptor: %v", err)
+	}
+
+	// Тест без сигнатуры (только CRC и размеры)
+	desc.Reset()
+	binary.Write(desc, binary.LittleEndian, uint32(0x12345678))
+	binary.Write(desc, binary.LittleEndian, uint64(1000))
+	binary.Write(desc, binary.LittleEndian, uint64(2000))
+
+	err = readDataDescriptor(desc, f)
+	if err != nil {
+		t.Errorf("failed to read ZIP64 data descriptor without signature: %v", err)
 	}
 }
 

@@ -22,6 +22,8 @@ const (
 	directory64LocSignature  = 0x07064b50
 	directory64EndSignature  = 0x06064b50
 	dataDescriptorSignature  = 0x08074b50 // de-facto standard; required by OS X Finder
+	splitSignature           = 0x08074b50 // Сигнатура первого тома многотомного архива
+	splitAltSignature        = 0x30304b50 // Альтернативная сигнатура (STPAN)
 	fileHeaderLen            = 30         // + filename + extra
 	directoryHeaderLen       = 46         // + filename + extra + comment
 	directoryEndLen          = 22         // + comment

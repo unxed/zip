@@ -52,21 +52,28 @@ type File struct {
 }
 
 func OpenReader(name string) (*ReadCloser, error) {
-	f, err := os.Open(name)
+	// Пытаемся открыть как многотомный архив
+	ra, size, closer, err := openMultiVolume(name)
 	if err != nil {
 		return nil, err
 	}
-	fi, err := f.Stat()
-	if err != nil {
-		f.Close()
-		return nil, err
-	}
+
 	r := new(ReadCloser)
-	if err = r.init(f, fi.Size()); err != nil && err != ErrInsecurePath {
-		f.Close()
+	if err = r.init(ra, size); err != nil && err != ErrInsecurePath {
+		closer.Close()
 		return nil, err
 	}
-	r.f = f
+
+	// В ReadCloser.f мы храним основной файл для совместимости,
+	// но Close() должен закрыть все тома.
+	if mvr, ok := closer.(*multiVolumeReader); ok {
+		r.f = mvr.files[len(mvr.files)-1] // Ссылка на главный .zip
+		// Подменяем Close на кастомный, чтобы закрыть все тома
+		r.Reader.r = ra
+	} else {
+		r.f = closer.(*os.File)
+	}
+
 	return r, err
 }
 
@@ -148,6 +155,9 @@ func (r *Reader) SetPassword(password string) {
 }
 
 func (rc *ReadCloser) Close() error {
+	if mvr, ok := rc.Reader.r.(*multiVolumeReader); ok {
+		return mvr.Close()
+	}
 	return rc.f.Close()
 }
 
@@ -503,22 +513,40 @@ parseExtras:
 }
 
 func readDataDescriptor(r io.Reader, f *File) error {
-	var buf [dataDescriptorLen]byte
-	if _, err := io.ReadFull(r, buf[:4]); err != nil {
+	// Спецификация 4.3.9: Data Descriptor может иметь или не иметь сигнатуру.
+	// Если файл ZIP64, поля CRC32 (4 байта), Compressed Size (8 байт), Uncompressed Size (8 байт).
+
+	sig := make([]byte, 4)
+	if _, err := io.ReadFull(r, sig); err != nil {
 		return err
 	}
+
 	off := 0
-	maybeSig := readBuf(buf[:4])
-	if maybeSig.uint32() != dataDescriptorSignature {
-		off += 4
+	readSize := 12
+	if binary.LittleEndian.Uint32(sig) == dataDescriptorSignature {
+		off = 0 // Сигнатура съедена
+	} else {
+		// Сигнатуры нет, первые 4 байта — это CRC32. Нужно вернуть их в обработку.
+		off = 4
 	}
-	if _, err := io.ReadFull(r, buf[off:12]); err != nil {
+
+	if f.zip64 {
+		readSize = 20 // 4 (CRC) + 8 + 8
+	}
+
+	buf := make([]byte, readSize)
+	if off > 0 {
+		copy(buf[:4], sig)
+	}
+	if _, err := io.ReadFull(r, buf[off:]); err != nil {
 		return err
 	}
-	b := readBuf(buf[:12])
+
+	b := readBuf(buf)
 	if b.uint32() != f.CRC32 {
 		return ErrChecksum
 	}
+	// Мы не проверяем размеры здесь, так как они уже считаны в FileHeader
 	return nil
 }
 
