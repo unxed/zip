@@ -26,7 +26,7 @@ It combines the stability of the standard library with the best open-source ZIP 
 
 *   **Cross-Platform Metadata:**
     *   **Unix:** Automatic preservation and restoration of UID/GID and extended timestamps.
-    *   **Windows:** Support for reading and writing NTFS Security Descriptors (ACLs).
+    *   **Windows:** Support for reading and writing NTFS Security Descriptors (ACLs; WIP).
 
 *   **Legacy Codepage Auto-Detection:** Includes the advanced heuristic algorithm from `7-zip` and `far2l` to automatically fix "mojibake" (garbled text) in filenames from legacy archives created on different operating systems.
 
