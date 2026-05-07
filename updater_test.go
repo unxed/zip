@@ -131,3 +131,55 @@ func TestUpdater_RemoveFirstFile(t *testing.T) {
 		t.Fatalf("expected 2 files, got %d", len(zr.File))
 	}
 }
+func TestUpdater_SameSize(t *testing.T) {
+	tempDir := t.TempDir()
+	zipPath := filepath.Join(tempDir, "samesize.zip")
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	w, _ := zw.Create("data.txt")
+	w.Write([]byte("12345"))
+	zw.Close()
+	f.Close()
+
+	fRW, _ := os.OpenFile(zipPath, os.O_RDWR, 0644)
+	u, _ := NewUpdater(fRW)
+	w, _ = u.Append("data.txt", APPEND_MODE_OVERWRITE)
+	w.Write([]byte("abcde")) // Same size
+	u.Close()
+	fRW.Close()
+
+	zr, _ := OpenReader(zipPath)
+	defer zr.Close()
+	rc, _ := zr.File[0].Open()
+	b, _ := io.ReadAll(rc)
+	if string(b) != "abcde" {
+		t.Errorf("expected 'abcde', got %q", string(b))
+	}
+}
+
+func TestUpdater_ReplaceLastFile(t *testing.T) {
+	tempDir := t.TempDir()
+	zipPath := filepath.Join(tempDir, "last.zip")
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	zw.Create("file1.txt")
+	w, _ := zw.Create("file2.txt")
+	w.Write([]byte("old"))
+	zw.Close()
+	f.Close()
+
+	fRW, _ := os.OpenFile(zipPath, os.O_RDWR, 0644)
+	u, _ := NewUpdater(fRW)
+	w, _ = u.Append("file2.txt", APPEND_MODE_OVERWRITE)
+	w.Write([]byte("new-much-longer-content"))
+	u.Close()
+	fRW.Close()
+
+	zr, _ := OpenReader(zipPath)
+	defer zr.Close()
+	if len(zr.File) != 2 {
+		t.Fatalf("expected 2 files, got %d", len(zr.File))
+	}
+}
