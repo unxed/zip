@@ -259,6 +259,36 @@ func TestArchiver_ContextCancellation(t *testing.T) {
 		t.Errorf("expected context.Canceled, got: %v", err)
 	}
 }
+func TestArchiver_InvalidStageDir(t *testing.T) {
+	tmp := t.TempDir()
+	srcDir := filepath.Join(tmp, "src")
+	os.Mkdir(srcDir, 0755)
+	// Создаем два файла, чтобы заставить Archiver использовать FilePool (так как concurrency=2)
+	os.WriteFile(filepath.Join(srcDir, "test1.txt"), []byte("data1"), 0644)
+	os.WriteFile(filepath.Join(srcDir, "test2.txt"), []byte("data2"), 0644)
+
+	zipF, _ := os.Create(filepath.Join(tmp, "test.zip"))
+	defer zipF.Close()
+
+	// Указываем несуществующий путь как директорию для буферов.
+	// Устанавливаем BufferSize(0), чтобы данные не оседали в памяти,
+	// а сразу шли в файловую систему (вызывая ошибку пути).
+	a, _ := NewArchiver(zipF, srcDir,
+		WithArchiverConcurrency(2),
+		WithArchiverBufferSize(0),
+		WithStageDirectory(filepath.Join(tmp, "non-existent-path")))
+
+	files := make(map[string]os.FileInfo)
+	i1, _ := os.Stat(filepath.Join(srcDir, "test1.txt"))
+	i2, _ := os.Stat(filepath.Join(srcDir, "test2.txt"))
+	files[filepath.Join(srcDir, "test1.txt")] = i1
+	files[filepath.Join(srcDir, "test2.txt")] = i2
+
+	err := a.Archive(context.Background(), files)
+	if err == nil {
+		t.Error("expected error due to invalid stage directory, got nil")
+	}
+}
 
 type mockFileInfo struct {
 	name string

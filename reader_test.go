@@ -94,6 +94,38 @@ func TestReader_EmptyArchive(t *testing.T) {
 		t.Errorf("expected 0 files, got %d", len(zr.File))
 	}
 }
+func TestReader_DuplicateFiles(t *testing.T) {
+	buf := new(bytes.Buffer)
+	zw := NewWriter(buf)
+
+	// Создаем два файла с абсолютно одинаковым именем
+	zw.Create("dup.txt")
+	zw.Create("dup.txt")
+	zw.Close()
+
+	zr, _ := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+
+	// Поиск по имени должен работать (возвращает первый)
+	f, err := zr.Open("dup.txt")
+	if err != nil {
+		t.Errorf("failed to open duplicate file: %v", err)
+	} else {
+		f.Close()
+	}
+
+	// Однако внутренняя структура fileList должна пометить их как дубликаты
+	zr.initFileList()
+	duplicatesFound := false
+	for _, entry := range zr.fileList {
+		if entry.name == "dup.txt" && entry.isDup {
+			duplicatesFound = true
+			break
+		}
+	}
+	if !duplicatesFound {
+		t.Error("expected duplicate flag in fileList for 'dup.txt'")
+	}
+}
 func TestReader_UnicodeArchiveComment(t *testing.T) {
 	buf := new(bytes.Buffer)
 	zw := NewWriter(buf)

@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"bytes"
 	"testing"
+	"errors"
+	"os"
+	"path/filepath"
 )
 
 func TestWriter_ZIP64Forced(t *testing.T) {
@@ -75,4 +78,39 @@ func TestWriter_ZIP64LargeCount(t *testing.T) {
 
 	// Возвращаем как было для корректного завершения
 	w.dir = originalDir
+}
+func TestWriter_LongNameError(t *testing.T) {
+	buf := new(bytes.Buffer)
+	w := NewWriter(buf)
+
+	// Создаем имя длиной более 65535 байт
+	longName := make([]byte, uint16max + 1)
+	for i := range longName {
+		longName[i] = 'a'
+	}
+
+	_, err := w.Create(string(longName))
+	if err == nil || !errors.Is(err, errLongName) {
+		t.Errorf("expected errLongName, got: %v", err)
+	}
+}
+
+func TestWriter_AddFS(t *testing.T) {
+	tmp := t.TempDir()
+	os.WriteFile(filepath.Join(tmp, "fs.txt"), []byte("fs data"), 0644)
+
+	buf := new(bytes.Buffer)
+	w := NewWriter(buf)
+
+	// Используем стандартный os.DirFS
+	err := w.AddFS(os.DirFS(tmp))
+	if err != nil {
+		t.Fatalf("AddFS failed: %v", err)
+	}
+	w.Close()
+
+	zr, _ := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if len(zr.File) != 1 || zr.File[0].Name != "fs.txt" {
+		t.Errorf("AddFS did not package file correctly")
+	}
 }
