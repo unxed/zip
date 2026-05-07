@@ -160,6 +160,48 @@ func TestArchiver_SkipIrregularFiles(t *testing.T) {
 		t.Errorf("expected 1 file (socket should be skipped), got %d", len(zr.File))
 	}
 }
+func TestArchiver_EmptyEntries(t *testing.T) {
+	tmp := t.TempDir()
+
+	// Создаем пустую папку и пустой файл
+	os.Mkdir(filepath.Join(tmp, "empty_dir"), 0755)
+	os.WriteFile(filepath.Join(tmp, "empty_file.txt"), []byte{}, 0644)
+
+	zipF, _ := os.Create(filepath.Join(tmp, "empty.zip"))
+	defer zipF.Close()
+
+	a, _ := NewArchiver(zipF, tmp)
+
+	files := make(map[string]os.FileInfo)
+	filepath.Walk(tmp, func(p string, info os.FileInfo, err error) error {
+		if p != tmp && p != zipF.Name() {
+			files[p] = info
+		}
+		return nil
+	})
+
+	if err := a.Archive(context.Background(), files); err != nil {
+		t.Fatalf("failed to archive empty entries: %v", err)
+	}
+	a.Close()
+
+	zr, _ := OpenReader(zipF.Name())
+	defer zr.Close()
+
+	foundFile := false
+	foundDir := false
+	for _, f := range zr.File {
+		if f.Name == "empty_file.txt" && f.UncompressedSize64 == 0 {
+			foundFile = true
+		}
+		if f.Name == "empty_dir/" {
+			foundDir = true
+		}
+	}
+	if !foundFile || !foundDir {
+		t.Errorf("archiver missed empty entries: file=%v, dir=%v", foundFile, foundDir)
+	}
+}
 
 type mockFileInfo struct {
 	name string

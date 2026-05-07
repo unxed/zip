@@ -93,6 +93,21 @@ func TestInitSystemLocales(t *testing.T) {
 		t.Errorf("expected CP866 decoder after setting ru_RU locale, got %s", string(res))
 	}
 }
+func TestInitSystemLocales_Japanese(t *testing.T) {
+	origOEM := OEMDecoder
+	defer func() { OEMDecoder = origOEM }()
+
+	// Тестируем японскую локаль (Shift-JIS / CP932)
+	t.Setenv("LC_ALL", "ja_JP.UTF-8")
+	initSystemLocales()
+
+	// "日" (Sun/Day) в Shift-JIS это 0x93FA
+	sjisData := []byte{0x93, 0xFA}
+	res, _ := OEMDecoder.Bytes(sjisData)
+	if string(res) != "日" {
+		t.Errorf("expected Shift-JIS decoder after setting ja_JP locale, got %s", string(res))
+	}
+}
 
 func TestParseUnicodeExtraField_Malformed(t *testing.T) {
 	// Test short extra field

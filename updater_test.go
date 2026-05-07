@@ -242,3 +242,28 @@ func TestUpdater_DuplicateHeaderError(t *testing.T) {
 		t.Error("expected error when appending duplicate FileHeader object, got nil")
 	}
 }
+func TestUpdater_OverwriteWithEmpty(t *testing.T) {
+	tmp := t.TempDir()
+	zipPath := filepath.Join(tmp, "to_empty.zip")
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	w, _ := zw.Create("data.txt")
+	w.Write([]byte("some substantial data"))
+	zw.Close()
+	f.Close()
+
+	// Перезаписываем пустым файлом
+	fRW, _ := os.OpenFile(zipPath, os.O_RDWR, 0644)
+	u, _ := NewUpdater(fRW)
+	w, _ = u.Append("data.txt", APPEND_MODE_OVERWRITE)
+	// Ничего не пишем в w
+	u.Close()
+	fRW.Close()
+
+	zr, _ := OpenReader(zipPath)
+	defer zr.Close()
+	if zr.File[0].UncompressedSize64 != 0 {
+		t.Errorf("expected size 0, got %d", zr.File[0].UncompressedSize64)
+	}
+}

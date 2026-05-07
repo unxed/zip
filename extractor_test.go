@@ -61,3 +61,26 @@ func TestExtractor_OutsideChroot(t *testing.T) {
 		t.Error("expected error for path outside of chroot, got nil")
 	}
 }
+
+func TestExtractor_ZipSlipSecurity(t *testing.T) {
+	tmp := t.TempDir()
+	zipPath := filepath.Join(tmp, "slip.zip")
+	dstDir := filepath.Join(tmp, "safe")
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	// Прямая попытка записать в корень системы (на Unix) или выйти далеко вверх
+	zw.Create("/tmp/pwned.txt")
+	zw.Create("../../../opt/pwned.txt")
+	zw.Close()
+	f.Close()
+
+	e, _ := NewExtractor(zipPath, dstDir)
+	err := e.Extract(context.Background())
+
+	// NewExtractor использует filepath.Abs(filepath.Join(chroot, file.Name))
+	// и затем проверяет HasPrefix. Это должно отсечь такие пути.
+	if err == nil {
+		t.Error("Extractor allowed Zip Slip path! Security violation.")
+	}
+}
