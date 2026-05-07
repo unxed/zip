@@ -4,85 +4,208 @@
 
 This project is a highly optimized and advanced drop-in replacement for the Go standard library `archive/zip`.
 
-It combines the stability of the standard library with the best open-source ZIP processing features available in the Go ecosystem into one single, powerful package.
+It combines the stability of the standard library with the best open-source ZIP processing features available in the Go ecosystem into a single, powerful package.
 
-## Features
+## Key Features
 
-1. **Drop-in Compatibility:** 100% compatible with the `archive/zip` API. You can safely replace your `archive/zip` imports with `github.com/unxed/zip`.
-2. **WinZip AES Encryption (AE-2):** Full support for reading and writing AES-encrypted archives (128, 192, and 256-bit).
-3. **Central Directory Encryption (CDE):** The ability to encrypt the archive's metadata (filenames, sizes, etc.), making the list of files invisible without a password.
-4. **Deflate64 Support:** Built-in decoder for the Deflate64 (Method 9) format, commonly used by Windows' built-in archiver for large files.
-5. **High Performance:** Uses the blazing-fast `klauspost/compress` library for `DEFLATE` and adds native `Zstandard` (ZSTD) support.
-6. **Multithreaded Archiving & Extraction:** Concurrent archiver and extractor (adapted from `fastzip`) that processes multiple files in parallel.
-7. **Cross-Platform Metadata:**
-    - **Unix:** Automatic preservation of UID/GID and extended timestamps.
-    - **Windows:** Support for reading and writing NTFS Security Descriptors (ACLs).
-8. **In-Place Archiving (Updater):** Modify existing ZIP files (append/overwrite) without full re-compression.
-9. **Legacy Codepage Auto-Detection:** Advanced encoding detection from `7-zip` / `far2l` to fix "mojibake" in filenames from legacy archives.
+*   **Drop-in Compatibility:** 100% compatible with the `archive/zip` API. You can safely replace your `archive/zip` imports with `github.com/unxed/zip`.
+
+*   **High Performance:** Uses the blazing-fast `klauspost/compress` library for `DEFLATE` and adds native `Zstandard (ZSTD)` support. Both reading and writing are heavily optimized with buffer pooling.
+
+*   **Parallel Archiving & Extraction:** A concurrent archiver and extractor (adapted from `saracen/fastzip`) processes multiple files in parallel, significantly speeding up operations on multi-core systems.
+
+*   **Advanced Encryption:**
+    *   **WinZip AES (AE-2):** Full support for reading and writing AES-encrypted archives (128, 192, and 256-bit).
+    *   **Central Directory Encryption (CDE):** Encrypt the archive's metadata (filenames, sizes, etc.), making the list of files completely invisible without the correct password.
+
+*   **Broad Compression Support:**
+    *   Built-in **Deflate64** (Method 9) decoder, used by Windows for large files.
+    *   Support for **BZIP2**, **LZMA**, and **PPMd** decompression.
+
+*   **In-Place Updates (Updater):** Modify existing ZIP files by appending or overwriting entries without performing a full re-compression of the entire archive.
+
+*   **Cross-Platform Metadata:**
+    *   **Unix:** Automatic preservation and restoration of UID/GID and extended timestamps.
+    *   **Windows:** Support for reading and writing NTFS Security Descriptors (ACLs).
+
+*   **Legacy Codepage Auto-Detection:** Includes the advanced heuristic algorithm from `7-zip` and `far2l` to automatically fix "mojibake" (garbled text) in filenames from legacy archives created on different operating systems.
+
+*   **Multi-Volume Support:** Transparently read split ZIP archives (e.g., `archive.z01`, `archive.z02`, ..., `archive.zip`).
 
 ## Usage
 
-### 1. Standard Reader / Writer
+### 1. Standard Drop-in Usage
+
+Simply replace the import path. All existing code for `archive/zip` will work.
 
 ```go
 import "github.com/unxed/zip"
 
 // Use exactly like the standard library
 r, err := zip.OpenReader("archive.zip")
+if err != nil {
+	log.Fatal(err)
+}
+defer r.Close()
 // ...
 ```
 
 ### 2. High-Speed Multithreaded Archiving
 
+The `Archiver` provides a high-level API for creating archives from a directory structure concurrently.
+
 ```go
-w, _ := os.Create("archive.zip")
-defer w.Close()
+package main
 
-// Create archiver with concurrency
-archiver, _ := zip.NewArchiver(w, "/path/to/source", zip.WithArchiverConcurrency(8))
-defer archiver.Close()
+import (
+	"context"
+	"log"
+	"os"
+	"path/filepath"
 
-// Map your files
-files := make(map[string]os.FileInfo)
-filepath.Walk("/path/to/source", func(p string, info os.FileInfo, err error) error {
-	files[p] = info
-	return nil
-})
+	"github.com/unxed/zip"
+)
 
-// Archive concurrently!
-archiver.Archive(context.Background(), files)
+func main() {
+	sourceDir := "/path/to/source"
+
+	w, err := os.Create("archive.zip")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer w.Close()
+
+	// Create an archiver with 8 concurrent workers
+	archiver, err := zip.NewArchiver(w, sourceDir, zip.WithArchiverConcurrency(8))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer archiver.Close()
+
+	// Gather files to be archived
+	files := make(map[string]os.FileInfo)
+	filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		// Skip the root directory itself
+		if path != sourceDir {
+			files[path] = info
+		}
+		return nil
+	})
+
+	// Archive all files concurrently
+	if err := archiver.Archive(context.Background(), files); err != nil {
+		log.Fatal(err)
+	}
+
+	log.Println("Archiving complete!")
+}
 ```
 
-### 3. In-Place Archive Update
+### 3. In-Place Archive Updates
+
+Modify an archive without rewriting it from scratch using the `Updater`.
 
 ```go
-f, _ := os.OpenFile("archive.zip", os.O_RDWR, 0)
+f, err := os.OpenFile("archive.zip", os.O_RDWR, 0)
+if err != nil {
+	log.Fatal(err)
+}
 defer f.Close()
 
-updater, _ := zip.NewUpdater(f)
-defer updater.Close()
+updater, err := zip.NewUpdater(f)
+if err != nil {
+	log.Fatal(err)
+}
 
-// Overwrite an existing file natively
-w, _ := updater.Append("config.json", zip.APPEND_MODE_OVERWRITE)
+// Overwrite an existing file with new content
+w, err := updater.Append("config.json", zip.APPEND_MODE_OVERWRITE)
+if err != nil {
+	log.Fatal(err)
+}
 w.Write([]byte(`{"updated": true}`))
 
-### 4. Create an Invisible (CDE) AES-256 Archive
+if err := updater.Close(); err != nil {
+	log.Fatal(err)
+}
+```
+
+### 4. Create an AES-256 Encrypted Archive
+
+Provide a password in the `FileHeader` to enable strong WinZip-compatible AES encryption.
+
+```go
+w, _ := os.Create("secure.zip")
+defer w.Close()
+
+zw := zip.NewWriter(w)
+defer zw.Close()
+
+fh := &zip.FileHeader{
+	Name:        "secret.txt",
+	Method:      zip.Deflate,
+	Password:    "super-secret-password",
+	AESStrength: 3, // 1 for 128-bit, 2 for 192-bit, 3 for 256-bit
+}
+
+f, err := zw.CreateHeader(fh)
+if err != nil {
+	log.Fatal(err)
+}
+f.Write([]byte("this is top secret data"))
+```
+
+### 5. Create an "Invisible" Archive (Central Directory Encryption)
+
+Encrypt the archive's file list itself, making it impossible to see the contents without a password.
 
 ```go
 w, _ := os.Create("stealth.zip")
-zw := zip.NewWriter(w)
+defer w.Close()
 
-// Encrypt the list of files itself!
+zw := zip.NewWriter(w)
+defer zw.Close()
+
+// Encrypt the list of files (the central directory)
 zw.SetEncryptCentralDirectory(true, "master-password")
 
-fh := &zip.FileHeader{Name: "secret.txt", Password: "master-password"}
-f, _ := zw.CreateHeader(fh)
+// Note: Individual files can still have their own passwords or be unencrypted.
+// Here, we encrypt the file with the same password for simplicity.
+fh := &zip.FileHeader{
+	Name:     "secret.txt",
+	Password: "master-password",
+}
+f, err := zw.CreateHeader(fh)
+if err != nil {
+	log.Fatal(err)
+}
 f.Write([]byte("top secret data"))
-zw.Close()
+```
+
+### 6. Reading a Multi-Volume Archive
+
+The library handles split archives automatically. Just open the final `.zip` file.
+
+```go
+// This will transparently read from archive.z01, archive.z02, etc.
+r, err := zip.OpenReader("archive.zip")
+if err != nil {
+	log.Fatal(err)
+}
+defer r.Close()
+
+// You can now access all files as if it were a single archive
+for _, f := range r.File {
+	fmt.Println("Found file:", f.Name)
+}
 ```
 
 ## License
 
-This project is released under the **BSD-3-Clause License**.
-See also `CREDITS.md`.
+This project is released under the **BSD-3-Clause License**. See the `LICENSE` file for details.
 
+## Acknowledgements
+
+This library is inspired by several other open-source zip implementations. Please see `CREDITS.md` for a detailed list of acknowledgements.
