@@ -2,6 +2,7 @@ package zip
 
 import (
 	"io/fs"
+	"encoding/binary"
 	"path"
 	"time"
 )
@@ -68,6 +69,10 @@ const (
 	sesAES192  = 0x660F
 	sesAES256  = 0x6610
 )
+// ConfigIncludePlatformMetadata defines if FileInfoHeader should automatically
+// include OS-specific metadata (like UID/GID on Unix).
+// Disabled by default to ensure archive portability.
+var ConfigIncludePlatformMetadata = false
 
 // FileHeader describes a file within a ZIP file.
 type FileHeader struct {
@@ -90,6 +95,14 @@ type FileHeader struct {
 	UncompressedSize64 uint64
 	Extra              []byte
 	ExternalAttrs      uint32
+	// UNIX attributes
+	Uid      int
+	Gid      int
+	OwnerSet bool
+
+	// WinZip AES encryption
+	Password    string
+	AESStrength byte // 1 = 128, 2 = 192, 3 = 256. Defaults to 3 (AES-256) if Password != ""
 }
 
 func (h *FileHeader) FileInfo() fs.FileInfo {
@@ -128,6 +141,10 @@ func FileInfoHeader(fi fs.FileInfo) (*FileHeader, error) {
 	} else {
 		fh.UncompressedSize = uint32(fh.UncompressedSize64)
 	}
+
+	// Automatically try to extract OS-specific metadata if enabled globally
+	appendPlatformExtra(fi, fh, ConfigIncludePlatformMetadata)
+
 	return fh, nil
 }
 
@@ -176,6 +193,97 @@ func timeToMsDosTime(t time.Time) (fDate uint16, fTime uint16) {
 	return
 }
 
+func (fh *FileHeader) injectAutoExtras() uint16 {
+	// 1. Handle Method 99 (AES) recovery and idempotency
+	originalMethod := fh.Method
+	if fh.Method == winzipAesExtraID {
+		// Already injected, try to recover original method from extra field
+		for eb := readBuf(fh.Extra); len(eb) >= 4; {
+			tag := eb.uint16()
+			size := int(eb.uint16())
+			if len(eb) < size {
+				break
+			}
+			if tag == winzipAesExtraID && size >= 7 {
+				eb.uint16() // version
+				eb.uint8()  // strength
+				eb.uint16() // vendor
+				originalMethod = eb.uint16()
+				break
+			}
+			eb = eb[size:]
+		}
+	}
+
+	// 2. Timestamps (0x5455)
+	var extTimeFlags uint8
+	if !fh.Modified.IsZero() {
+		fh.ModifiedDate, fh.ModifiedTime = timeToMsDosTime(fh.Modified)
+		extTimeFlags |= 1
+	}
+	if !fh.Accessed.IsZero() {
+		extTimeFlags |= 2
+	}
+	if !fh.Created.IsZero() {
+		extTimeFlags |= 4
+	}
+
+	// Simple check to avoid duplicate tag injection
+	hasTag := func(id uint16) bool {
+		for eb := readBuf(fh.Extra); len(eb) >= 4; {
+			tag := eb.uint16()
+			size := int(eb.uint16())
+			if tag == id {
+				return true
+			}
+			if len(eb) < size {
+				break
+			}
+			eb = eb[size:]
+		}
+		return false
+	}
+
+	if extTimeFlags > 0 && !hasTag(extTimeExtraID) {
+		var size uint16 = 1
+		if extTimeFlags&1 != 0 { size += 4 }
+		if extTimeFlags&2 != 0 { size += 4 }
+		if extTimeFlags&4 != 0 { size += 4 }
+
+		buf := make([]byte, 4+size)
+		eb := writeBuf(buf)
+		eb.uint16(extTimeExtraID)
+		eb.uint16(size)
+		eb.uint8(extTimeFlags)
+		if extTimeFlags&1 != 0 { eb.uint32(uint32(fh.Modified.Unix())) }
+		if extTimeFlags&2 != 0 { eb.uint32(uint32(fh.Accessed.Unix())) }
+		if extTimeFlags&4 != 0 { eb.uint32(uint32(fh.Created.Unix())) }
+		fh.Extra = append(fh.Extra, buf...)
+	}
+
+	// 3. Unix IDs (0x7875)
+	if fh.OwnerSet && !hasTag(infoZipNewUnixExtraID) {
+		fh.Extra = appendUnixExtra(fh.Extra, fh.Uid, fh.Gid)
+	}
+
+	// 4. AES Encryption (0x9901)
+	if fh.Password != "" && fh.Method != winzipAesExtraID {
+		fh.Flags |= 0x1 // Set Encryption bit
+		if fh.AESStrength == 0 {
+			fh.AESStrength = 3
+		}
+		fh.Method = winzipAesExtraID
+		buf := make([]byte, 11)
+		binary.LittleEndian.PutUint16(buf[0:2], winzipAesExtraID)
+		binary.LittleEndian.PutUint16(buf[2:4], 7)
+		binary.LittleEndian.PutUint16(buf[4:6], 2) // AE-2
+		buf[6] = fh.AESStrength
+		binary.LittleEndian.PutUint16(buf[7:9], 0x4541)
+		binary.LittleEndian.PutUint16(buf[9:11], originalMethod)
+		fh.Extra = append(fh.Extra, buf...)
+	}
+	return originalMethod
+}
 func (h *FileHeader) ModTime() time.Time {
 	return msDosTimeToTime(h.ModifiedDate, h.ModifiedTime)
 }

@@ -247,18 +247,7 @@ func (u *Updater) AppendHeader(fh *FileHeader, mode AppendMode) (io.Writer, erro
 	fh.CreatorVersion = fh.CreatorVersion&0xff00 | zipVersion20
 	fh.ReaderVersion = zipVersion20
 
-	if !fh.Modified.IsZero() {
-		fh.ModifiedDate, fh.ModifiedTime = timeToMsDosTime(fh.Modified)
-
-		var mbuf [9]byte
-		mt := uint32(fh.Modified.Unix())
-		eb := writeBuf(mbuf[:])
-		eb.uint16(extTimeExtraID)
-		eb.uint16(5)
-		eb.uint8(1)
-		eb.uint32(mt)
-		fh.Extra = append(fh.Extra, mbuf[:]...)
-	}
+	originalMethod := fh.injectAutoExtras()
 
 	var (
 		ow io.Writer
@@ -285,25 +274,40 @@ func (u *Updater) AppendHeader(fh *FileHeader, mode AppendMode) (io.Writer, erro
 			zipw:      u.rw,
 			compCount: &countWriter{w: u.rw},
 			crc32:     crc32.NewIEEE(),
+			isAES:     fh.Password != "",
 		}
-		comp := u.compressor(fh.Method)
+
+		// 1. Write Header FIRST
+		if err := writeHeader(u.rw, h); err != nil {
+			return nil, err
+		}
+
+		// 2. Init AES/Comp AFTER header
+		var sink io.Writer = fw.compCount
+		if fw.isAES {
+			var err error
+			fw.aesW, err = newWinZipAesWriter(fw.compCount, fh.Password, fh.AESStrength)
+			if err != nil {
+				return nil, err
+			}
+			sink = fw.aesW
+		}
+
+		comp := u.compressor(originalMethod)
 		if comp == nil {
 			return nil, ErrAlgorithm
 		}
 		var err error
-		fw.comp, err = comp(fw.compCount)
+		fw.comp, err = comp(sink)
 		if err != nil {
 			return nil, err
 		}
 		fw.rawCount = &countWriter{w: fw.comp}
 		fw.header = h
 		ow = fw
+		u.last = fw
 	}
 	u.dir = append(u.dir, h)
-	if err := writeHeader(u.rw, h); err != nil {
-		return nil, err
-	}
-	u.last = fw
 	offset, err = u.rw.offset()
 	if err != nil {
 		return nil, err

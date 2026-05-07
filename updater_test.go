@@ -371,3 +371,52 @@ func TestUpdater_WithPrefixStub(t *testing.T) {
 		t.Errorf("Prefix stub corrupted! got %q", string(head))
 	}
 }
+func TestUpdater_AESEncryption(t *testing.T) {
+	tmp := t.TempDir()
+	zipPath := filepath.Join(tmp, "update_aes.zip")
+
+	// 1. Создаем обычный архив
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	zw.Create("plain.txt")
+	zw.Close()
+	f.Close()
+
+	// 2. Добавляем шифрованный файл через Updater
+	fRW, _ := os.OpenFile(zipPath, os.O_RDWR, 0)
+	u, _ := NewUpdater(fRW)
+	fh := &FileHeader{
+		Name:     "encrypted.txt",
+		Password: "updater-pass",
+	}
+	w, err := u.AppendHeader(fh, APPEND_MODE_KEEP_ORIGINAL)
+	if err != nil {
+		t.Fatalf("AppendHeader failed: %v", err)
+	}
+	w.Write([]byte("secret content"))
+	u.Close()
+	fRW.Close()
+
+	// 3. Проверяем читаемость
+	zr, _ := OpenReader(zipPath)
+	zr.SetPassword("updater-pass")
+
+	found := false
+	for _, file := range zr.File {
+		if file.Name == "encrypted.txt" {
+			found = true
+			rc, err := file.Open()
+			if err != nil {
+				t.Fatalf("failed to open encrypted file from updater: %v", err)
+			}
+			data, _ := io.ReadAll(rc)
+			rc.Close()
+			if string(data) != "secret content" {
+				t.Errorf("data corruption in updater AES: got %q", string(data))
+			}
+		}
+	}
+	if !found {
+		t.Error("encrypted file not found in updated archive")
+	}
+}

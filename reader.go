@@ -199,16 +199,16 @@ func (f *File) Open() (io.ReadCloser, error) {
 	if f == nil || f.zipr == nil {
 		return nil, os.ErrInvalid
 	}
-	bodyOffset, err := f.findBodyOffset()
-	if err != nil {
-		return nil, err
-	}
 	if strings.HasSuffix(f.Name, "/") {
 		if f.UncompressedSize64 != 0 {
 			return &dirReader{ErrFormat}, nil
 		} else {
 			return &dirReader{io.EOF}, nil
 		}
+	}
+	bodyOffset, err := f.findBodyOffset()
+	if err != nil {
+		return nil, err
 	}
 	
 	size := int64(f.CompressedSize64)
@@ -345,7 +345,10 @@ func (r *checksumReader) Read(b []byte) (n int, err error) {
 		if r.nread != r.f.UncompressedSize64 {
 			return 0, io.ErrUnexpectedEOF
 		}
-		if r.desr != nil {
+		if r.f.Method == winzipAesExtraID {
+			// WinZip AES (AE-2) uses a CRC of 0; checksum is verified via HMAC
+			err = io.EOF
+		} else if r.desr != nil {
 			if err1 := readDataDescriptor(r.desr, r.f); err1 != nil {
 				if err1 == io.EOF {
 					err = io.ErrUnexpectedEOF
@@ -508,6 +511,13 @@ parseExtras:
 			fieldBuf.uint32()
 			ts := int64(fieldBuf.uint32())
 			modified = time.Unix(ts, 0)
+		case infoZipNewUnixExtraID:
+			// Populate Uid/Gid fields from 0x7875
+			if uid, gid, ok := parseUnixExtra(f.Extra); ok {
+				f.Uid = uid
+				f.Gid = gid
+				f.OwnerSet = true
+			}
 		case extTimeExtraID:
 			if len(fieldBuf) < 1 {
 				continue parseExtras

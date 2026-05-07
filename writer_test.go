@@ -2,6 +2,7 @@ package zip
 
 import (
 	"fmt"
+	"time"
 	"bytes"
 	"testing"
 	"errors"
@@ -140,5 +141,71 @@ func TestLZMA_Decompression(t *testing.T) {
 	dcomp := decompressor(LZMA)
 	if dcomp == nil {
 		t.Fatal("LZMA decompressor not registered")
+	}
+}
+
+func TestWriter_AutoExtrasInjection(t *testing.T) {
+	buf := new(bytes.Buffer)
+	zw := NewWriter(buf)
+
+	now := time.Now().Truncate(time.Second)
+	fh := &FileHeader{
+		Name:     "meta.txt",
+		Modified: now,
+		Accessed: now.Add(-time.Hour),
+		Created:  now.Add(-24 * time.Hour),
+		Uid:      501,
+		Gid:      20,
+		OwnerSet: true,
+	}
+
+	w, _ := zw.CreateHeader(fh)
+	w.Write([]byte("metadata test"))
+	zw.Close()
+
+	zr, _ := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	f := zr.File[0]
+
+	// 1. Проверяем таймстемпы через 0x5455 (Extended Timestamp)
+	if f.Modified.Unix() != fh.Modified.Unix() {
+		t.Errorf("Modified time mismatch: got %v, want %v", f.Modified, fh.Modified)
+	}
+	if f.Accessed.Unix() != fh.Accessed.Unix() {
+		t.Errorf("Accessed time mismatch: got %v, want %v", f.Accessed, fh.Accessed)
+	}
+
+	// 2. Проверяем UNIX ID через 0x7875 (Info-ZIP New Unix)
+	uid, gid, ok := parseUnixExtra(f.Extra)
+	if !ok {
+		t.Fatal("Unix extra field (0x7875) not found in output")
+	}
+	if uid != 501 || gid != 20 {
+		t.Errorf("UID/GID mismatch: got %d:%d, want 501:20", uid, gid)
+	}
+}
+func TestWriter_MetadataIdempotency(t *testing.T) {
+	// Проверяем, что многократный вызов инжектора не дублирует Extra Fields
+	now := time.Now().Truncate(time.Second)
+	fh := &FileHeader{
+		Name:     "idempotent.txt",
+		Modified: now,
+		Uid:      1000,
+		OwnerSet: true,
+	}
+
+	// Первый вызов (через создание)
+	buf := new(bytes.Buffer)
+	zw := NewWriter(buf)
+	zw.CreateHeader(fh)
+	zw.Close()
+
+	initialExtraLen := len(fh.Extra)
+
+	// Симулируем повторную инъекцию (например, при повторном использовании заголовка)
+	fh.injectAutoExtras()
+	fh.injectAutoExtras()
+
+	if len(fh.Extra) != initialExtraLen {
+		t.Errorf("Extra fields bloated! initial %d, current %d. Likely duplicate tags.", initialExtraLen, len(fh.Extra))
 	}
 }

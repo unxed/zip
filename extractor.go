@@ -322,12 +322,11 @@ func (e *Extractor) updateFileMetadata(path string, file *File) error {
 		return err
 	}
 
-	uid, gid, ok := parseUnixExtra(file.Extra)
-	if !ok {
+	if !file.OwnerSet {
 		return nil
 	}
 
-	err := lchown(path, uid, gid)
+	err := lchown(path, file.Uid, file.Gid)
 	if err == nil {
 		return nil
 	}

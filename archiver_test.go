@@ -204,6 +204,48 @@ func TestArchiver_EmptyEntries(t *testing.T) {
 		t.Errorf("archiver missed empty entries: file=%v, dir=%v", foundFile, foundDir)
 	}
 }
+func TestArchiver_MetadataPreservation(t *testing.T) {
+	tmp := t.TempDir()
+	srcDir := filepath.Join(tmp, "src")
+	os.Mkdir(srcDir, 0755)
+
+	filePath := filepath.Join(srcDir, "meta.txt")
+	os.WriteFile(filePath, []byte("metadata preservation"), 0644)
+
+	now := time.Now().Truncate(time.Second)
+	os.Chtimes(filePath, now.Add(-time.Hour), now)
+
+	zipPath := filepath.Join(tmp, "meta.zip")
+	f, _ := os.Create(zipPath)
+
+	// Включаем поддержку метаданных через опцию Archiver
+	a, _ := NewArchiver(f, srcDir, WithArchiverPlatformMetadata(true))
+	info, _ := os.Stat(filePath)
+
+	// Вручную добавим OwnerSet для имитации успешного подтягивания (т.к. тест может бежать не под root)
+	fh := &FileHeader{
+		Name:     "meta.txt",
+		Uid:      123,
+		Gid:      456,
+		OwnerSet: true,
+		Modified: now,
+	}
+
+	err := a.createFile(context.Background(), filePath, info, fh, nil)
+	if err != nil {
+		t.Fatalf("createFile failed: %v", err)
+	}
+	a.Close()
+	f.Close()
+
+	zr, _ := OpenReader(zipPath)
+	file := zr.File[0]
+
+	uid, gid, ok := parseUnixExtra(file.Extra)
+	if !ok || uid != 123 || gid != 456 {
+		t.Errorf("Unix metadata not preserved in Archiver: %d:%d (ok=%v)", uid, gid, ok)
+	}
+}
 func TestArchiver_ZstdParallel(t *testing.T) {
 	tmp := t.TempDir()
 	srcDir := filepath.Join(tmp, "src")

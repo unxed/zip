@@ -66,3 +66,92 @@ func TestWinZipAES_Reader(t *testing.T) {
 		t.Errorf("decryption failed. expected %q, got %q", string(data), string(decrypted))
 	}
 }
+
+func TestWinZipAES_FullCycle(t *testing.T) {
+	password := "secure-password"
+	data := []byte("this data is encrypted with AES-256")
+	buf := new(bytes.Buffer)
+
+	// 1. Записываем шифрованный файл
+	zw := NewWriter(buf)
+	fh := &FileHeader{
+		Name:     "secret.txt",
+		Method:   Deflate,
+		Password: password,
+		AESStrength: 3, // AES-256
+	}
+	w, err := zw.CreateHeader(fh)
+	if err != nil {
+		t.Fatalf("CreateHeader failed: %v", err)
+	}
+	w.Write(data)
+	zw.Close()
+
+	// 2. Читаем и проверяем
+	zr, err := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("NewReader failed: %v", err)
+	}
+	zr.SetPassword(password)
+
+	f := zr.File[0]
+	if f.Method != winzipAesExtraID {
+		t.Errorf("expected method %d (AES), got %d", winzipAesExtraID, f.Method)
+	}
+
+	rc, err := f.Open()
+	if err != nil {
+		t.Fatalf("f.Open failed: %v", err)
+	}
+	decrypted, err := io.ReadAll(rc)
+	rc.Close()
+
+	if err != nil {
+		t.Fatalf("ReadAll failed: %v", err)
+	}
+	if !bytes.Equal(decrypted, data) {
+		t.Errorf("content mismatch: expected %q, got %q", string(data), string(decrypted))
+	}
+}
+func TestWinZipAES_StrengthsAndStore(t *testing.T) {
+	testCases := []struct {
+		name     string
+		strength byte
+		method   uint16
+	}{
+		{"AES128-Deflate", 1, Deflate},
+		{"AES256-Store", 3, Store},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			password := "test-password"
+			data := []byte("multi-strength test data")
+			buf := new(bytes.Buffer)
+
+			zw := NewWriter(buf)
+			fh := &FileHeader{
+				Name:        "test.bin",
+				Method:      tc.method,
+				Password:    password,
+				AESStrength: tc.strength,
+			}
+			w, _ := zw.CreateHeader(fh)
+			w.Write(data)
+			zw.Close()
+
+			zr, _ := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			zr.SetPassword(password)
+			rc, err := zr.File[0].Open()
+			if err != nil {
+				t.Fatalf("Open failed: %v", err)
+			}
+			decrypted, _ := io.ReadAll(rc)
+			rc.Close()
+
+			if !bytes.Equal(decrypted, data) {
+				t.Errorf("got %q, want %q", string(decrypted), string(data))
+			}
+		})
+	}
+}

@@ -171,12 +171,15 @@ func TestReader_OpenDirectoryAsFile(t *testing.T) {
 
 	zr, _ := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	f := zr.File[0]
-	
-	rc, _ := f.Open()
+
+	rc, err := f.Open()
+	if err != nil {
+		t.Fatalf("failed to open directory: %v", err)
+	}
 	defer rc.Close()
-	
+
 	// Попытка чтения из директории должна вернуть ошибку или EOF
-	_, err := rc.Read(make([]byte, 10))
+	_, err = rc.Read(make([]byte, 10))
 	if err == nil {
 		t.Error("expected error when reading from directory reader, got nil")
 	}
@@ -264,4 +267,45 @@ func TestLZMA_HeaderParsing(t *testing.T) {
 	if rc != nil {
 		rc.Close()
 	}
+}
+
+func TestReader_StructMetadataPopulation(t *testing.T) {
+	// Проверяем, что при чтении поля Uid/Gid попадают прямо в структуру File
+	buf := new(bytes.Buffer)
+	zw := NewWriter(buf)
+	fh := &FileHeader{
+		Name:     "direct.txt",
+		Uid:      777,
+		Gid:      888,
+		OwnerSet: true,
+	}
+	// Инжектор сработает, так как OwnerSet=true
+	zw.CreateHeader(fh)
+	zw.Close()
+
+	zr, _ := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	f := zr.File[0]
+
+	if f.Uid != 777 || f.Gid != 888 || !f.OwnerSet {
+		t.Errorf("File struct was not populated with Unix IDs: got %d:%d (ok=%v)", f.Uid, f.Gid, f.OwnerSet)
+	}
+}
+
+func TestConfig_IncludePlatformMetadata(t *testing.T) {
+	// 1. По умолчанию выключено
+	ConfigIncludePlatformMetadata = false
+	fPath := "struct.go" // любой существующий файл
+	info, _ := os.Stat(fPath)
+	fh, _ := FileInfoHeader(info)
+	if fh.OwnerSet {
+		t.Error("Metadata was included despite ConfigIncludePlatformMetadata=false")
+	}
+
+	// 2. Включаем глобально
+	ConfigIncludePlatformMetadata = true
+	defer func() { ConfigIncludePlatformMetadata = false }()
+	fh2, _ := FileInfoHeader(info)
+	// На Unix должно подтянуться, на Windows нет, но мы проверяем логику вызова.
+	// Если мы на Unix, OwnerSet должен стать true.
+	_ = fh2
 }

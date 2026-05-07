@@ -26,6 +26,6 @@ func lchown(name string, uid, gid int) error {
 	return nil
 }
 
-func appendPlatformExtra(fi os.FileInfo, hdr *FileHeader) {
+func appendPlatformExtra(fi os.FileInfo, hdr *FileHeader, force bool) {
 	// Not applicable on Windows
 }

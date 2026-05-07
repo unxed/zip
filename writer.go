@@ -230,18 +230,7 @@ func (w *Writer) CreateHeader(fh *FileHeader) (io.Writer, error) {
 	fh.CreatorVersion = fh.CreatorVersion&0xff00 | zipVersion20
 	fh.ReaderVersion = zipVersion20
 
-	if !fh.Modified.IsZero() {
-		fh.ModifiedDate, fh.ModifiedTime = timeToMsDosTime(fh.Modified)
-
-		var mbuf [9]byte
-		mt := uint32(fh.Modified.Unix())
-		eb := writeBuf(mbuf[:])
-		eb.uint16(extTimeExtraID)
-		eb.uint16(5)
-		eb.uint8(1)
-		eb.uint32(mt)
-		fh.Extra = append(fh.Extra, mbuf[:]...)
-	}
+	originalMethod := fh.injectAutoExtras()
 
 	var (
 		ow io.Writer
@@ -268,25 +257,41 @@ func (w *Writer) CreateHeader(fh *FileHeader) (io.Writer, error) {
 			zipw:      w.cw,
 			compCount: &countWriter{w: w.cw},
 			crc32:     crc32.NewIEEE(),
+			isAES:     fh.Password != "",
 		}
-		comp := w.compressor(fh.Method)
+
+		// 1. Important: Write the Local File Header FIRST.
+		if err := writeHeader(w.cw, h); err != nil {
+			return nil, err
+		}
+
+		// 2. Initialize encryption/compression stream AFTER header.
+		var sink io.Writer = fw.compCount
+		if fw.isAES {
+			var err error
+			// This call writes Salt/Verif bytes to w.cw via compCount.
+			fw.aesW, err = newWinZipAesWriter(fw.compCount, fh.Password, fh.AESStrength)
+			if err != nil {
+				return nil, err
+			}
+			sink = fw.aesW
+		}
+
+		comp := w.compressor(originalMethod)
 		if comp == nil {
 			return nil, ErrAlgorithm
 		}
 		var err error
-		fw.comp, err = comp(fw.compCount)
+		fw.comp, err = comp(sink)
 		if err != nil {
 			return nil, err
 		}
 		fw.rawCount = &countWriter{w: fw.comp}
 		fw.header = h
 		ow = fw
+		w.last = fw
 	}
 	w.dir = append(w.dir, h)
-	if err := writeHeader(w.cw, h); err != nil {
-		return nil, err
-	}
-	w.last = fw
 	return ow, nil
 }
 
@@ -447,6 +452,8 @@ type fileWriter struct {
 	compCount *countWriter
 	crc32     hash.Hash32
 	closed    bool
+	aesW      io.WriteCloser
+	isAES     bool
 }
 
 func (w *fileWriter) Write(p []byte) (int, error) {
@@ -471,9 +478,18 @@ func (w *fileWriter) close() error {
 	if err := w.comp.Close(); err != nil {
 		return err
 	}
+	if w.aesW != nil {
+		if err := w.aesW.Close(); err != nil {
+			return err
+		}
+	}
 
 	fh := w.header.FileHeader
-	fh.CRC32 = w.crc32.Sum32()
+	if w.isAES {
+		fh.CRC32 = 0 // AE-2 dictates that CRC is 0
+	} else {
+		fh.CRC32 = w.crc32.Sum32()
+	}
 	fh.CompressedSize64 = uint64(w.compCount.count)
 	fh.UncompressedSize64 = uint64(w.rawCount.count)
 
@@ -501,7 +517,9 @@ func (w *fileWriter) writeDataDescriptor() error {
 	}
 	b := writeBuf(buf)
 	b.uint32(dataDescriptorSignature)
-	b.uint32(w.CRC32)
+
+	// For AES files, header.CRC32 is already 0
+	b.uint32(w.header.CRC32)
 	if w.isZip64() {
 		b.uint64(w.CompressedSize64)
 		b.uint64(w.UncompressedSize64)

@@ -37,6 +37,7 @@ type archiverOptions struct {
 	bufferSize  int
 	stageDir    string
 	offset      int64
+	includePlatformMetadata bool
 }
 
 func WithArchiverMethod(method uint16) ArchiverOption {
@@ -76,6 +77,14 @@ func WithStageDirectory(dir string) ArchiverOption {
 func WithArchiverOffset(n int64) ArchiverOption {
 	return func(o *archiverOptions) error {
 		o.offset = n
+		return nil
+	}
+}
+// WithArchiverPlatformMetadata enables inclusion of local OS metadata (UID/GID)
+// for this archiver instance.
+func WithArchiverPlatformMetadata(enable bool) ArchiverOption {
+	return func(o *archiverOptions) error {
+		o.includePlatformMetadata = enable
 		return nil
 	}
 }
@@ -172,7 +181,7 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 		}
 
 		hdr := &hdrs[i]
-		fileInfoHeaderFast(rel, fi, hdr)
+		a.fileInfoHeaderFast(rel, fi, hdr)
 
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -212,7 +221,7 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 	return wg.Wait()
 }
 
-func fileInfoHeaderFast(name string, fi os.FileInfo, hdr *FileHeader) {
+func (a *Archiver) fileInfoHeaderFast(name string, fi os.FileInfo, hdr *FileHeader) {
 	hdr.Name = filepath.ToSlash(name)
 	hdr.UncompressedSize64 = uint64(fi.Size())
 	hdr.Modified = fi.ModTime()
@@ -225,7 +234,9 @@ func fileInfoHeaderFast(name string, fi os.FileInfo, hdr *FileHeader) {
 	} else {
 		hdr.UncompressedSize = uint32(hdr.UncompressedSize64)
 	}
-	appendPlatformExtra(fi, hdr)
+
+	// Respect archiver options for metadata
+	appendPlatformExtra(fi, hdr, a.options.includePlatformMetadata)
 }
 
 func (a *Archiver) createDirectory(fi os.FileInfo, hdr *FileHeader) error {
@@ -344,17 +355,7 @@ func (a *Archiver) createHeaderRaw(fi os.FileInfo, fh *FileHeader) (io.Writer, e
 	fh.CreatorVersion = fh.CreatorVersion&0xff00 | zipVersion20
 	fh.ReaderVersion = zipVersion20
 
-	if !fh.Modified.IsZero() {
-		fh.ModifiedDate, fh.ModifiedTime = timeToMsDosTime(fh.Modified)
-		var mbuf [9]byte
-		mt := uint32(fh.Modified.Unix())
-		eb := writeBuf(mbuf[:])
-		eb.uint16(extTimeExtraID)
-		eb.uint16(5)
-		eb.uint8(1)
-		eb.uint32(mt)
-		fh.Extra = append(fh.Extra, mbuf[:]...)
-	}
+	fh.injectAutoExtras()
 
 	return a.zw.CreateRaw(fh)
 }

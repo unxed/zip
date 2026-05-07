@@ -45,8 +45,13 @@ func lchown(name string, uid, gid int) error {
 	return os.Lchown(name, uid, gid)
 }
 
-func appendPlatformExtra(fi os.FileInfo, hdr *FileHeader) {
+func appendPlatformExtra(fi os.FileInfo, hdr *FileHeader, force bool) {
+	if !force {
+		return
+	}
 	if stat, ok := fi.Sys().(*syscall.Stat_t); ok {
-		hdr.Extra = appendUnixExtra(hdr.Extra, int(stat.Uid), int(stat.Gid))
+		hdr.Uid = int(stat.Uid)
+		hdr.Gid = int(stat.Gid)
+		hdr.OwnerSet = true
 	}
 }
