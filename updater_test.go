@@ -267,3 +267,35 @@ func TestUpdater_OverwriteWithEmpty(t *testing.T) {
 		t.Errorf("expected size 0, got %d", zr.File[0].UncompressedSize64)
 	}
 }
+func TestUpdater_PhysicalTruncate(t *testing.T) {
+	tmp := t.TempDir()
+	zipPath := filepath.Join(tmp, "shrink.zip")
+
+	// 1. Создаем большой архив. Используем метод Store, чтобы нули не сжались.
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	w, _ := zw.CreateHeader(&FileHeader{
+		Name:   "large.txt",
+		Method: Store,
+	})
+	w.Write(make([]byte, 100*1024)) // 100KB
+	zw.Close()
+	f.Close()
+
+	initialInfo, _ := os.Stat(zipPath)
+	initialSize := initialInfo.Size()
+
+	// 2. Перезаписываем маленьким файлом
+	fRW, _ := os.OpenFile(zipPath, os.O_RDWR, 0644)
+	u, _ := NewUpdater(fRW)
+	w, _ = u.Append("large.txt", APPEND_MODE_OVERWRITE)
+	w.Write([]byte("small"))
+	u.Close()
+	fRW.Close()
+
+	// 3. Проверяем размер файла на диске
+	finalInfo, _ := os.Stat(zipPath)
+	if finalInfo.Size() >= initialSize {
+		t.Errorf("file was not truncated! old size %d, new size %d", initialSize, finalInfo.Size())
+	}
+}

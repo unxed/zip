@@ -93,6 +93,7 @@ func (d *Directory) HeaderOffset() int64 {
 // decompress the whole file.
 type Updater struct {
 	rw          *sectionReaderWriter
+	rws         io.ReadWriteSeeker
 	offset      int64
 	dir         []*header
 	last        *fileWriter
@@ -116,7 +117,8 @@ func NewUpdater(rws io.ReadWriteSeeker) (*Updater, error) {
 		return nil, err
 	}
 	zu := &Updater{
-		rw: newSectionReaderWriter(rws),
+		rw:  newSectionReaderWriter(rws),
+		rws: rws,
 	}
 	if err = zu.init(size); err != nil && err != ErrInsecurePath {
 		return nil, err
@@ -225,6 +227,7 @@ func (u *Updater) AppendHeader(fh *FileHeader, mode AppendMode) (io.Writer, erro
 		if offset, err = u.removeFile(existingDirIndex); err != nil {
 			return nil, err
 		}
+		u.dirOffset = offset
 	}
 
 	if _, err := u.rw.Seek(offset, io.SeekStart); err != nil {
@@ -355,7 +358,6 @@ func (u *Updater) removeFile(dirIndex int) (int64, error) {
 	u.dir = append(u.dir[:dirIndex], u.dir[dirIndex+1:len(u.dir)]...)
 	for i := dirIndex; i < len(u.dir); i++ {
 		u.dir[i].offset -= uint64(size)
-		u.dir[i].Extra = nil
 	}
 	return wp, nil
 }
@@ -385,6 +387,11 @@ func (u *Updater) Close() error {
 		if err := u.last.close(); err != nil {
 			return err
 		}
+		offset, err := u.rw.offset()
+		if err != nil {
+			return err
+		}
+		u.dirOffset = offset
 		u.last = nil
 	}
 	if u.closed {
@@ -392,71 +399,30 @@ func (u *Updater) Close() error {
 	}
 	u.closed = true
 
-	start, err := u.rw.offset()
-	if err != nil {
+	// Центральный каталог должен начинаться сразу после последнего файла
+	start := u.dirOffset
+	if u.last != nil {
+		// Если мы что-то писали, актуальный конец данных в u.dirOffset
+	}
+
+	if _, err := u.rw.Seek(start, io.SeekStart); err != nil {
 		return err
 	}
-	if err = u.writeDirectory(start); err != nil {
+
+	if err := u.writeDirectory(start); err != nil {
 		return fmt.Errorf("zip: write directory: %w", err)
 	}
-	currentOffset, err := u.rw.offset()
-	if err != nil {
-		return err
+
+	// Физически обрезаем файл до текущей позиции (конца EOCD)
+	if t, ok := u.rws.(interface{ Truncate(int64) error }); ok {
+		curr, _ := u.rw.offset()
+		return t.Truncate(curr)
 	}
-	fileEndOffset, err := u.rw.Seek(0, io.SeekEnd)
-	if err != nil {
-		return err
-	}
-	if fileEndOffset > currentOffset {
-		offset := fileEndOffset - currentOffset
-		if start < u.dirOffset {
-			u.dirOffset += offset
-		} else {
-			u.dirOffset = start + offset
-		}
-		_, err = u.rw.Seek(start, io.SeekStart)
-		if err != nil {
-			return err
-		}
-		if err = u.writeDirectory(start); err != nil {
-			return fmt.Errorf("zip: write directory: %w", err)
-		}
-	}
+
 	return nil
 }
 
 func (u *Updater) writeDirectory(start int64) error {
-	var err error
-	if start < u.dirOffset {
-		var buffSize int64
-		var buffer []byte
-		size := u.dirOffset - start
-		if u.dirOffset-start > bufferSize {
-			buffer = make([]byte, bufferSize)
-			buffSize = bufferSize
-		} else {
-			buffer = make([]byte, size)
-			buffSize = size
-		}
-		var wp = start
-		_, err = u.rw.Seek(wp, io.SeekStart)
-		if err != nil {
-			return err
-		}
-		for wp < u.dirOffset-buffSize {
-			n, err := u.rw.Write(buffer)
-			if err != nil {
-				return err
-			}
-			wp += int64(n)
-		}
-		if wp < u.dirOffset {
-			if _, err := u.rw.Write(buffer[:u.dirOffset-wp]); err != nil {
-				return err
-			}
-		}
-		start = u.dirOffset
-	}
 	for _, h := range u.dir {
 		var buf []byte = make([]byte, directoryHeaderLen)
 		b := writeBuf(buf)
