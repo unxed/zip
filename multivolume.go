@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// multiVolumeReader соединяет несколько файлов в один виртуальный поток ReaderAt.
+// multiVolumeReader joins multiple files into a single virtual ReaderAt stream.
 type multiVolumeReader struct {
 	files   []*os.File
 	offsets []int64
@@ -21,7 +21,7 @@ func (m *multiVolumeReader) ReadAt(p []byte, off int64) (n int, err error) {
 	}
 
 	for i := range m.files {
-		// Проверяем, попадает ли смещение в этот файл
+		// Check if the offset falls within this file
 		fileStart := m.offsets[i]
 		fileEnd := m.size
 		if i+1 < len(m.offsets) {
@@ -44,7 +44,7 @@ func (m *multiVolumeReader) ReadAt(p []byte, off int64) (n int, err error) {
 			}
 
 			if n < len(p) && nPart == int(toRead) {
-				// Данные продолжаются в следующем томе
+				// Data continues in the next volume
 				nextN, nextErr := m.ReadAt(p[n:], off+int64(nPart))
 				return n + nextN, nextErr
 			}
@@ -64,7 +64,7 @@ func (m *multiVolumeReader) Close() error {
 	return lastErr
 }
 
-// openMultiVolume ищет части архива .z01, .z02... рядом с .zip
+// openMultiVolume looks for archive parts (.z01, .z02...) alongside the .zip file
 func openMultiVolume(mainPath string) (io.ReaderAt, int64, io.Closer, error) {
 	ext := filepath.Ext(mainPath)
 	prefix := strings.TrimSuffix(mainPath, ext)
@@ -73,12 +73,12 @@ func openMultiVolume(mainPath string) (io.ReaderAt, int64, io.Closer, error) {
 	var offsets []int64
 	var totalSize int64
 
-	// Собираем тома по порядку: .z01, .z02...
+	// Collect volumes in order: .z01, .z02...
 	for i := 1; ; i++ {
 		volPath := fmt.Sprintf("%s.z%02d", prefix, i)
 		f, err := os.Open(volPath)
 		if err != nil {
-			break // Тома закончились
+			break // No more volumes
 		}
 		fi, _ := f.Stat()
 		offsets = append(offsets, totalSize)
@@ -86,10 +86,10 @@ func openMultiVolume(mainPath string) (io.ReaderAt, int64, io.Closer, error) {
 		files = append(files, f)
 	}
 
-	// Последним всегда идет сам .zip
+	// The .zip file itself always comes last
 	fMain, err := os.Open(mainPath)
 	if err != nil {
-		// Закрываем уже открытые тома при ошибке
+		// Close already opened volumes on error
 		for _, f := range files { f.Close() }
 		return nil, 0, nil, err
 	}
@@ -99,7 +99,7 @@ func openMultiVolume(mainPath string) (io.ReaderAt, int64, io.Closer, error) {
 	files = append(files, fMain)
 
 	if len(files) == 1 {
-		// Это обычный одиночный файл
+	// This is a regular single file
 		return fMain, fiMain.Size(), fMain, nil
 	}
 

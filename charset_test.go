@@ -8,7 +8,7 @@ import (
 	"golang.org/x/text/encoding/charmap"
 )
 
-// buildUnicodeExtra динамически собирает Info-ZIP Unicode Extra Field
+// buildUnicodeExtra dynamically assembles Info-ZIP Unicode Extra Field
 func buildUnicodeExtra(raw []byte, utf8Str string) []byte {
 	crc := crc32.ChecksumIEEE(raw)
 	payload := make([]byte, 5+len(utf8Str))
@@ -70,7 +70,7 @@ func TestDecodeText(t *testing.T) {
 	}
 }
 func TestInitSystemLocales(t *testing.T) {
-	// Сохраняем оригинальные декодеры
+	// Save the original decoders
 	origOEM := OEMDecoder
 	origANSI := ANSIDecoder
 	defer func() {
@@ -78,12 +78,12 @@ func TestInitSystemLocales(t *testing.T) {
 		ANSIDecoder = origANSI
 	}()
 
-	// Тестируем русскую локаль (CP866/Win1251)
+	// Test Russian locale (CP866/Win1251)
 	t.Setenv("LC_ALL", "ru_RU.UTF-8")
 	initSystemLocales()
 
-	// Проверяем, что декодеры изменились (сравнение через Bytes)
-	testStr := []byte{0x8f} // 'П' в CP866
+	// Verify that decoders have changed (comparison via Bytes)
+	testStr := []byte{0x8f} // 'P' in CP866
 	res, _ := OEMDecoder.Bytes(testStr)
 	if string(res) != "П" {
 		t.Errorf("expected CP866 decoder after setting ru_RU locale, got %s", string(res))
@@ -93,11 +93,11 @@ func TestInitSystemLocales_Japanese(t *testing.T) {
 	origOEM := OEMDecoder
 	defer func() { OEMDecoder = origOEM }()
 
-	// Тестируем японскую локаль (Shift-JIS / CP932)
+	// Test Japanese locale (Shift-JIS / CP932)
 	t.Setenv("LC_ALL", "ja_JP.UTF-8")
 	initSystemLocales()
 
-	// "日" (Sun/Day) в Shift-JIS это 0x93FA
+	// "日" (Sun/Day) in Shift-JIS is 0x93FA
 	sjisData := []byte{0x93, 0xFA}
 	res, _ := OEMDecoder.Bytes(sjisData)
 	if string(res) != "日" {
@@ -105,10 +105,10 @@ func TestInitSystemLocales_Japanese(t *testing.T) {
 	}
 }
 func TestCharset_UnknownFallback(t *testing.T) {
-	// Подаем кодировку, которой нет в маппинге
+	// Provide an encoding that is not in the mapping
 	raw := []byte{0x41, 0x42, 0x43} // "ABC"
 	// decodeText(raw, isUTF8Flag, packOS, packVer, extra, isComment)
-	// Ставим флаги так, чтобы сработал Step 6 (System/Fallback)
+	// Set flags so that Step 6 (System/Fallback) is triggered
 	got := decodeText(raw, false, 99, 99, nil, false)
 	if got != "ABC" {
 		t.Errorf("expected raw string fallback, got %q", got)

@@ -7,8 +7,8 @@ import (
 )
 
 func TestReadDirectory64End_V2_SES(t *testing.T) {
-	// Подготавливаем структуру Zip64 EOCD Record Version 2 (SES)
-	// Спецификация 4.3.14 + 7.3.4
+	// Prepare Zip64 EOCD Record Version 2 (SES) structure
+	// Specification 4.3.14 + 7.3.4
 	buf := new(bytes.Buffer)
 	binary.Write(buf, binary.LittleEndian, uint32(directory64EndSignature))
 	binary.Write(buf, binary.LittleEndian, uint64(44+24))    // Size (56-12 + 24)

@@ -142,12 +142,12 @@ func TestArchiver_SkipIrregularFiles(t *testing.T) {
 
 	a, _ := NewArchiver(zipF, tmp)
 
-	// Симулируем FileInfo для сокета (нерегулярный файл)
+	// Simulate FileInfo for a socket (irregular file)
 	files := make(map[string]os.FileInfo)
 	info, _ := os.Stat(fPath)
 	files[fPath] = info
 
-	// Добавляем файл с модом сокета вручную (FileInfo это интерфейс)
+	// Manually add a file with socket mode (FileInfo is an interface)
 	files["/tmp/socket"] = mockFileInfo{name: "socket", mode: os.ModeSocket}
 
 	err := a.Archive(context.Background(), files)
@@ -155,7 +155,7 @@ func TestArchiver_SkipIrregularFiles(t *testing.T) {
 		t.Fatalf("archiver failed: %v", err)
 	}
 
-	// Проверяем, что в архиве только 1 файл (сокет пропущен)
+	// Verify that the archive contains only 1 file (the socket was skipped)
 	a.Close()
 	zr, _ := OpenReader(zipF.Name())
 	if len(zr.File) != 1 {
@@ -165,7 +165,7 @@ func TestArchiver_SkipIrregularFiles(t *testing.T) {
 func TestArchiver_EmptyEntries(t *testing.T) {
 	tmp := t.TempDir()
 
-	// Создаем пустую папку и пустой файл
+	// Create an empty directory and an empty file
 	os.Mkdir(filepath.Join(tmp, "empty_dir"), 0755)
 	os.WriteFile(filepath.Join(tmp, "empty_file.txt"), []byte{}, 0644)
 
@@ -218,11 +218,11 @@ func TestArchiver_MetadataPreservation(t *testing.T) {
 	zipPath := filepath.Join(tmp, "meta.zip")
 	f, _ := os.Create(zipPath)
 
-	// Включаем поддержку метаданных через опцию Archiver
+	// Enable metadata support via Archiver option
 	a, _ := NewArchiver(f, srcDir, WithArchiverPlatformMetadata(true))
 	info, _ := os.Stat(filePath)
 
-	// Вручную добавим OwnerSet для имитации успешного подтягивания (т.к. тест может бежать не под root)
+	// Manually add OwnerSet to simulate a successful pull (since tests might not run as root)
 	fh := &FileHeader{
 		Name:     "meta.txt",
 		Uid:      123,
@@ -251,7 +251,7 @@ func TestArchiver_ZstdParallel(t *testing.T) {
 	srcDir := filepath.Join(tmp, "src")
 	os.Mkdir(srcDir, 0755)
 
-	// Генерируем много файлов для параллельной работы
+	// Generate multiple files for parallel processing
 	filesMap := make(map[string]os.FileInfo)
 	for i := 0; i < 20; i++ {
 		p := filepath.Join(srcDir, fmt.Sprintf("file_%d.bin", i))
@@ -263,14 +263,14 @@ func TestArchiver_ZstdParallel(t *testing.T) {
 	zipF, _ := os.Create(filepath.Join(tmp, "zstd_para.zip"))
 	defer zipF.Close()
 
-	// Используем ZSTD в параллельном режиме
+	// Use ZSTD in parallel mode
 	a, _ := NewArchiver(zipF, srcDir, WithArchiverMethod(ZSTD), WithArchiverConcurrency(4))
 	if err := a.Archive(context.Background(), filesMap); err != nil {
 		t.Fatalf("parallel ZSTD archive failed: %v", err)
 	}
 	a.Close()
 
-	// Проверяем, что файлы читаются
+	// Verify that files are readable
 	zr, _ := OpenReader(zipF.Name())
 	defer zr.Close()
 	if len(zr.File) != 20 || zr.File[0].Method != ZSTD {
@@ -293,7 +293,7 @@ func TestArchiver_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	a, _ := NewArchiver(zipF, srcDir)
 
-	// Отменяем сразу
+	// Cancel immediately
 	cancel()
 
 	err := a.Archive(ctx, map[string]os.FileInfo{p: info})
@@ -305,16 +305,16 @@ func TestArchiver_InvalidStageDir(t *testing.T) {
 	tmp := t.TempDir()
 	srcDir := filepath.Join(tmp, "src")
 	os.Mkdir(srcDir, 0755)
-	// Создаем два файла, чтобы заставить Archiver использовать FilePool (так как concurrency=2)
+	// Create two files to force the Archiver to use FilePool (since concurrency=2)
 	os.WriteFile(filepath.Join(srcDir, "test1.txt"), []byte("data1"), 0644)
 	os.WriteFile(filepath.Join(srcDir, "test2.txt"), []byte("data2"), 0644)
 
 	zipF, _ := os.Create(filepath.Join(tmp, "test.zip"))
 	defer zipF.Close()
 
-	// Указываем несуществующий путь как директорию для буферов.
-	// Устанавливаем BufferSize(0), чтобы данные не оседали в памяти,
-	// а сразу шли в файловую систему (вызывая ошибку пути).
+	// Provide a non-existent path as the directory for buffers.
+	// Set BufferSize(0) so that data does not stay in memory,
+	// but goes directly to the file system (triggering a path error).
 	a, _ := NewArchiver(zipF, srcDir,
 		WithArchiverConcurrency(2),
 		WithArchiverBufferSize(0),

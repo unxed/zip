@@ -29,7 +29,7 @@ type Reader struct {
 	File          []*File
 	Comment       string
 	decompressors map[uint16]Decompressor
-	password      func() string // Callback для получения пароля
+	password      func() string // Callback to retrieve the password
 
 	baseOffset int64
 
@@ -52,7 +52,7 @@ type File struct {
 }
 
 func OpenReader(name string) (*ReadCloser, error) {
-	// Пытаемся открыть как многотомный архив
+	// Attempt to open as a multi-volume archive
 	ra, size, closer, err := openMultiVolume(name)
 	if err != nil {
 		return nil, err
@@ -64,11 +64,11 @@ func OpenReader(name string) (*ReadCloser, error) {
 		return nil, err
 	}
 
-	// В ReadCloser.f мы храним основной файл для совместимости,
-	// но Close() должен закрыть все тома.
+	// In ReadCloser.f, we store the main file for compatibility,
+	// but Close() must close all volumes.
 	if mvr, ok := closer.(*multiVolumeReader); ok {
-		r.f = mvr.files[len(mvr.files)-1] // Ссылка на главный .zip
-		// Подменяем Close на кастомный, чтобы закрыть все тома
+		r.f = mvr.files[len(mvr.files)-1] // Link to the primary .zip
+		// Replace Close with a custom one to close all volumes
 		r.Reader.r = ra
 	} else {
 		r.f = closer.(*os.File)
@@ -112,19 +112,19 @@ func (r *Reader) init(rdr io.ReaderAt, size int64) error {
 		if r.password == nil {
 			return errors.New("zip: central directory is encrypted but no password provided")
 		}
-		// В случае CDE центральный каталог защищен SES.
-		// Для простоты используем ту же логику AES, если это AES SES.
-		// PKWARE SES AES использует аналогичный WinZip подход к потоку.
+		// In the case of CDE, the central directory is protected by SES.
+		// For simplicity, we use the same AES logic if it's AES SES.
+		// PKWARE SES AES uses an approach similar to WinZip for the stream.
 		info := &winzipAesInfo{
-			actualMethod: Store, // CD обычно Store или Deflate
+			actualMethod: Store, // CD is usually Store or Deflate
 			strength:     1,     // Default 128
 		}
 		switch end.bitLen {
 		case 192: info.strength = 2
 		case 256: info.strength = 3
 		}
-		// Пропускаем Archive Decryption Header (обычно 12-24 байта)
-		// На практике SES сложнее, но мы закладываем фундамент под дешифрование потока.
+		// Skip the Archive Decryption Header (usually 12-24 bytes)
+		// In practice, SES is more complex, but we are laying the foundation for stream decryption.
 		rd, _, err = newWinZipAesReader(rs, r.password(), info, int64(end.directorySize))
 		if err != nil {
 			return err
@@ -214,8 +214,8 @@ func (f *File) Open() (io.ReadCloser, error) {
 	size := int64(f.CompressedSize64)
 	encryptionOffset := int64(0)
 	var crypto *zipCrypto
-	
-	// Определяем метод декомпрессии заранее (для AES он может поменяться)
+
+	// Determine the decompression method in advance (it might change for AES)
 	method := f.Method
 
 	r := io.NewSectionReader(f.zipr, f.headerOffset+bodyOffset, size)
@@ -228,14 +228,14 @@ func (f *File) Open() (io.ReadCloser, error) {
 		pass := f.zip.password()
 
 		if f.Method == winzipAesExtraID || f.aesInfo != nil {
-			// Случай WinZip AES (Method 99)
+			// WinZip AES (Method 99) case
 			var err error
 			rr, method, err = newWinZipAesReader(r, pass, f.aesInfo, size)
 			if err != nil {
 				return nil, err
 			}
 		} else {
-			// Классический ZipCrypto
+			// Classic ZipCrypto
 			crypto = newZipCrypto([]byte(pass))
 			header := make([]byte, 12)
 			if _, err := f.zipr.ReadAt(header, f.headerOffset+bodyOffset); err != nil {
@@ -250,7 +250,7 @@ func (f *File) Open() (io.ReadCloser, error) {
 				return nil, errors.New("zip: incorrect password")
 			}
 			encryptionOffset = 12
-			// Сдвигаем базовый ридер для классики
+			// Shift the base reader for classic encryption
 			r = io.NewSectionReader(f.zipr, f.headerOffset+bodyOffset+encryptionOffset, size-12)
 			rr = &cipherReader{r: r, crypto: crypto}
 		}
@@ -540,12 +540,12 @@ parseExtras:
 			}
 			f.aesInfo = &winzipAesInfo{
 				version:      fieldBuf.uint16(),
-				strength:     fieldBuf.uint8(), // fieldBuf.uint8() сместит указатель
-				actualMethod: 0, // установим ниже
+				strength:     fieldBuf.uint8(), // fieldBuf.uint8() will move the pointer
+				actualMethod: 0, // will be set below
 			}
-			// Пропускаем Vendor ID "AE" (2 байта)
+			// Skip Vendor ID "AE" (2 bytes)
 			fieldBuf.uint16()
-			// Настоящий метод сжатия
+			// The actual compression method
 			f.aesInfo.actualMethod = fieldBuf.uint16()
 		}
 	}
@@ -569,8 +569,8 @@ parseExtras:
 }
 
 func readDataDescriptor(r io.Reader, f *File) error {
-	// Спецификация 4.3.9: Data Descriptor может иметь или не иметь сигнатуру.
-	// Если файл ZIP64, поля CRC32 (4 байта), Compressed Size (8 байт), Uncompressed Size (8 байт).
+	// Specification 4.3.9: Data Descriptor may or may not have a signature.
+	// If the file is ZIP64, fields: CRC32 (4 bytes), Compressed Size (8 bytes), Uncompressed Size (8 bytes).
 
 	sig := make([]byte, 4)
 	if _, err := io.ReadFull(r, sig); err != nil {
@@ -580,9 +580,9 @@ func readDataDescriptor(r io.Reader, f *File) error {
 	off := 0
 	readSize := 12
 	if binary.LittleEndian.Uint32(sig) == dataDescriptorSignature {
-		off = 0 // Сигнатура съедена
+		off = 0 // Signature consumed
 	} else {
-		// Сигнатуры нет, первые 4 байта — это CRC32. Нужно вернуть их в обработку.
+		// No signature, first 4 bytes are CRC32. Need to return them for processing.
 		off = 4
 	}
 
@@ -602,7 +602,7 @@ func readDataDescriptor(r io.Reader, f *File) error {
 	if b.uint32() != f.CRC32 {
 		return ErrChecksum
 	}
-	// Мы не проверяем размеры здесь, так как они уже считаны в FileHeader
+	// We don't check sizes here as they are already read in FileHeader
 	return nil
 }
 
@@ -704,7 +704,7 @@ func findDirectory64End(r io.ReaderAt, directoryEndOffset int64) (int64, error) 
 }
 
 func readDirectory64End(r io.ReaderAt, offset int64, d *directoryEnd) (err error) {
-	// 1. Читаем первые 12 байт, чтобы узнать реальный размер записи
+	// 1. Read the first 12 bytes to get the actual record size
 	var hbuf [12]byte
 	if _, err := r.ReadAt(hbuf[:], offset); err != nil {
 		return err
@@ -713,10 +713,10 @@ func readDirectory64End(r io.ReaderAt, offset int64, d *directoryEnd) (err error
 	if sig := hb.uint32(); sig != directory64EndSignature {
 		return ErrFormat
 	}
-	// recordSize — это размер записи за вычетом первых 12 байт (sig + size)
+	// recordSize is the size of the record minus the first 12 bytes (sig + size)
 	recordSize := hb.uint64()
 
-	// 2. Читаем оставшуюся часть записи
+	// 2. Read the rest of the record
 	buf := make([]byte, recordSize)
 	if _, err := r.ReadAt(buf, offset+12); err != nil {
 		return err
@@ -732,8 +732,8 @@ func readDirectory64End(r io.ReaderAt, offset int64, d *directoryEnd) (err error
 	d.directorySize = b.uint64()
 	d.directoryOffset = b.uint64()
 
-	// 3. Проверяем наличие Version 2 (SES)
-	// APPNOTE 7.3.4: Поля версии 2 занимают минимум 24 байта:
+	// 3. Check for the presence of Version 2 (SES)
+	// APPNOTE 7.3.4: Version 2 fields occupy at least 24 bytes:
 	// Method(2) + CSize(8) + USize(8) + AlgId(2) + BitLen(2) + Flags(2)
 	if len(b) >= 24 {
 		b.uint16() // Compression Method

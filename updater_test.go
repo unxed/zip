@@ -235,8 +235,8 @@ func TestUpdater_DuplicateHeaderError(t *testing.T) {
 
 	fh := &FileHeader{Name: "new.txt"}
 	u.AppendHeader(fh, APPEND_MODE_KEEP_ORIGINAL)
-	
-	// Попытка добавить ТОТ ЖЕ заголовок второй раз без закрытия стрима
+
+	// Attempting to add THE SAME header a second time without closing the stream
 	_, err := u.AppendHeader(fh, APPEND_MODE_KEEP_ORIGINAL)
 	if err == nil {
 		t.Error("expected error when appending duplicate FileHeader object, got nil")
@@ -253,11 +253,11 @@ func TestUpdater_OverwriteWithEmpty(t *testing.T) {
 	zw.Close()
 	f.Close()
 
-	// Перезаписываем пустым файлом
+	// Overwrite with an empty file
 	fRW, _ := os.OpenFile(zipPath, os.O_RDWR, 0644)
 	u, _ := NewUpdater(fRW)
 	w, _ = u.Append("data.txt", APPEND_MODE_OVERWRITE)
-	// Ничего не пишем в w
+	// Write nothing to w
 	u.Close()
 	fRW.Close()
 
@@ -271,7 +271,7 @@ func TestUpdater_PhysicalTruncate(t *testing.T) {
 	tmp := t.TempDir()
 	zipPath := filepath.Join(tmp, "shrink.zip")
 
-	// 1. Создаем большой архив. Используем метод Store, чтобы нули не сжались.
+	// 1. Create a large archive. Use Method Store so zeros are not compressed.
 	f, _ := os.Create(zipPath)
 	zw := NewWriter(f)
 	w, _ := zw.CreateHeader(&FileHeader{
@@ -285,7 +285,7 @@ func TestUpdater_PhysicalTruncate(t *testing.T) {
 	initialInfo, _ := os.Stat(zipPath)
 	initialSize := initialInfo.Size()
 
-	// 2. Перезаписываем маленьким файлом
+	// 2. Overwrite with a small file
 	fRW, _ := os.OpenFile(zipPath, os.O_RDWR, 0644)
 	u, _ := NewUpdater(fRW)
 	w, _ = u.Append("large.txt", APPEND_MODE_OVERWRITE)
@@ -293,7 +293,7 @@ func TestUpdater_PhysicalTruncate(t *testing.T) {
 	u.Close()
 	fRW.Close()
 
-	// 3. Проверяем размер файла на диске
+	// 3. Check file size on disk
 	finalInfo, _ := os.Stat(zipPath)
 	if finalInfo.Size() >= initialSize {
 		t.Errorf("file was not truncated! old size %d, new size %d", initialSize, finalInfo.Size())
@@ -316,28 +316,28 @@ func TestUpdater_WithPrefixStub(t *testing.T) {
 	tmp := t.TempDir()
 	zipPath := filepath.Join(tmp, "stub.exe")
 
-	// 1. Создаем файл с префиксом (имитация SFX-архива)
+	// 1. Create a file with a prefix (simulating an SFX archive)
 	f, _ := os.Create(zipPath)
-	stub := []byte("#!/bin/bash\necho SFX\n") // Точно 21 байт
+	stub := []byte("#!/bin/bash\necho SFX\n") // Exactly 21 bytes
 	f.Write(stub)
-	
+
 	zw := NewWriter(f)
-	// SetOffset сообщает ZIP-писателю, что логическое начало данных — после префикса.
+	// SetOffset tells the ZIP writer that the logical start of data is after the prefix.
 	zw.SetOffset(int64(len(stub)))
 	w, _ := zw.Create("internal.txt")
 	w.Write([]byte("inside zip"))
 	zw.Close()
 	f.Close()
 
-	// 2. Обновляем этот файл через Updater
+	// 2. Update this file using the Updater
 	fRW, _ := os.OpenFile(zipPath, os.O_RDWR, 0644)
 	u, err := NewUpdater(fRW)
 	if err != nil {
 		t.Fatalf("failed to open updater: %v", err)
 	}
 	
-	// Если ZIP создавался с SetOffset, внутренние смещения уже включают размер префикса.
-	// В этом случае расчетный baseOffset для читателя будет 0. Оба варианта (0 и 21) валидны.
+	// If the ZIP was created with SetOffset, internal offsets already include the prefix size.
+	// In this case, the calculated baseOffset for the reader will be 0. Both variants (0 and 21) are valid.
 	if u.baseOffset != 0 && u.baseOffset != int64(len(stub)) {
 		t.Errorf("unexpected baseOffset: got %d", u.baseOffset)
 	}
@@ -347,13 +347,13 @@ func TestUpdater_WithPrefixStub(t *testing.T) {
 	u.Close()
 	fRW.Close()
 
-	// 3. Проверяем, что префикс на месте и данные читаются
+	// 3. Verify that the prefix is in place and the data is readable
 	zr, err := OpenReader(zipPath)
 	if err != nil {
 		t.Fatalf("failed to open updated sfx: %v", err)
 	}
-	// При использовании SetOffset писатель создает абсолютные смещения.
-	// Reader это обнаруживает и устанавливает baseOffset в 0. Это корректно.
+	// When using SetOffset, the writer creates absolute offsets.
+	// The Reader detects this and sets baseOffset to 0. This is correct.
 	if zr.baseOffset != 0 && zr.baseOffset != int64(len(stub)) {
 		t.Errorf("Reader reported unexpected baseOffset: got %d", zr.baseOffset)
 	}
@@ -362,7 +362,7 @@ func TestUpdater_WithPrefixStub(t *testing.T) {
 	}
 	zr.Close()
 
-	// Проверяем физическое начало файла
+	// Check the physical start of the file
 	head := make([]byte, 11)
 	fRead, _ := os.Open(zipPath)
 	fRead.Read(head)
@@ -375,14 +375,14 @@ func TestUpdater_AESEncryption(t *testing.T) {
 	tmp := t.TempDir()
 	zipPath := filepath.Join(tmp, "update_aes.zip")
 
-	// 1. Создаем обычный архив
+	// 1. Create a regular archive
 	f, _ := os.Create(zipPath)
 	zw := NewWriter(f)
 	zw.Create("plain.txt")
 	zw.Close()
 	f.Close()
 
-	// 2. Добавляем шифрованный файл через Updater
+	// 2. Add an encrypted file via Updater
 	fRW, _ := os.OpenFile(zipPath, os.O_RDWR, 0)
 	u, _ := NewUpdater(fRW)
 	fh := &FileHeader{
@@ -397,7 +397,7 @@ func TestUpdater_AESEncryption(t *testing.T) {
 	u.Close()
 	fRW.Close()
 
-	// 3. Проверяем читаемость
+	// 3. Verify readability
 	zr, _ := OpenReader(zipPath)
 	zr.SetPassword("updater-pass")
 

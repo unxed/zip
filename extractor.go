@@ -251,13 +251,13 @@ func (e *Extractor) createSymlink(path string, file *File) error {
 }
 
 func (e *Extractor) createFile(ctx context.Context, path string, file *File) (err error) {
-	// 1. Предварительная проверка по заголовку
+	// 1. Preliminary check based on the header
 	if e.options.maxFileSize > 0 && file.UncompressedSize64 > uint64(e.options.maxFileSize) {
 		return fmt.Errorf("zip: file %q size %d exceeds limit %d", file.Name, file.UncompressedSize64, e.options.maxFileSize)
 	}
 
 	if e.options.maxDecompressionRatio > 0 && file.CompressedSize64 > 0 {
-		// Используем умножение вместо деления, чтобы избежать проблем с округлением и нулем
+		// Use multiplication instead of division to avoid rounding issues and division by zero
 		if int64(file.UncompressedSize64) > e.options.maxDecompressionRatio*int64(file.CompressedSize64) {
 			ratio := int64(file.UncompressedSize64 / file.CompressedSize64)
 			return fmt.Errorf("zip: file %q suspicious compression ratio %d:1", file.Name, ratio)
@@ -283,7 +283,7 @@ func (e *Extractor) createFile(ctx context.Context, path string, file *File) (er
 	bw := bufioWriterPool.Get().(*bufio.Writer)
 	defer bufioWriterPool.Put(bw)
 
-	// Используем LimitedReader для физического ограничения чтения (защита от поддельных заголовков)
+	// Use LimitedReader to physically restrict reading (protection against spoofed headers)
 	var lr io.Reader = r
 	if e.options.maxFileSize > 0 {
 		lr = &io.LimitedReader{R: r, N: e.options.maxFileSize}
@@ -295,7 +295,7 @@ func (e *Extractor) createFile(ctx context.Context, path string, file *File) (er
 		return err
 	}
 
-	// Если мы прочитали все, что позволил лимит, но в основном ридере еще есть данные - это бомба
+	// If we read everything allowed by the limit, but data still remains in the source reader - it's a bomb
 	if e.options.maxFileSize > 0 {
 		tmp := make([]byte, 1)
 		if n, _ := r.Read(tmp); n > 0 {

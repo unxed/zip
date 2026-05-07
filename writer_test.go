@@ -14,15 +14,15 @@ func TestWriter_ZIP64Forced(t *testing.T) {
 	buf := new(bytes.Buffer)
 	w := NewWriter(buf)
 
-	// Имитируем огромный файл через заголовок, не записывая терабайты данных
+	// Simulate a huge file via the header, without writing terabytes of data
 	fh := &FileHeader{
 		Name:               "huge.txt",
 		Method:             Store,
-		UncompressedSize64: uint64(uint32max) + 1, // Больше 4GB
+		UncompressedSize64: uint64(uint32max) + 1, // More than 4GB
 		CompressedSize64:   uint64(uint32max) + 1,
 	}
 
-	// CreateRaw позволяет нам записать данные "как есть"
+	// CreateRaw allows us to write the data "as is"
 	wr, err := w.CreateRaw(fh)
 	if err != nil {
 		t.Fatal(err)
@@ -30,7 +30,7 @@ func TestWriter_ZIP64Forced(t *testing.T) {
 	wr.Write([]byte("fake data"))
 	w.Close()
 
-	// Теперь читаем и проверяем, что флаг zip64 проставился
+	// Now read and check that the zip64 flag was set
 	zr, err := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	if err != nil {
 		t.Fatal(err)
@@ -49,14 +49,14 @@ func TestWriter_ZIP64LargeCount(t *testing.T) {
 	buf := new(bytes.Buffer)
 	w := NewWriter(buf)
 
-	// Симулируем ситуацию, когда файлов больше, чем 65535 (лимит uint16)
-	// Для экономии времени и памяти мы просто напрямую модифицируем счетчик в тесте
+	// Simulate a situation where there are more than 65535 files (uint16 limit)
+	// To save time and memory, we will modify the counter directly in the test
 	for i := 0; i < 10; i++ {
 		w.Create(fmt.Sprintf("file_%d.txt", i))
 	}
 
-	// Хак для теста: подменяем количество записей перед закрытием
-	// чтобы спровоцировать запись ZIP64 заголовков
+	// Hack for the test: substitute the number of records before closing
+	// to trigger writing of ZIP64 headers
 	originalDir := w.dir
 	fakeDir := make([]*header, uint16max + 1)
 	for i := range fakeDir {
@@ -69,22 +69,22 @@ func TestWriter_ZIP64LargeCount(t *testing.T) {
 		t.Fatalf("Close failed on large count simulation: %v", err)
 	}
 
-	// Проверяем, что в структуре EOCD прописались маркеры 0xFFFF,
-	// что означает наличие ZIP64 Locator
+	// Check that the EOCD structure contains the 0xFFFF markers,
+	// which indicates the presence of the ZIP64 Locator
 	data := buf.Bytes()
-	// Сигнатура EOCD: 0x06054b50 в Little Endian
+	// EOCD signature: 0x06054b50 in Little Endian
 	if !bytes.Contains(data, []byte{0x50, 0x4b, 0x05, 0x06}) {
 		t.Error("EOCD signature not found")
 	}
 
-	// Возвращаем как было для корректного завершения
+	// Restore as it was for proper completion
 	w.dir = originalDir
 }
 func TestWriter_LongNameError(t *testing.T) {
 	buf := new(bytes.Buffer)
 	w := NewWriter(buf)
 
-	// Создаем имя длиной более 65535 байт
+	// Create a name with a length greater than 65535 bytes
 	longName := make([]byte, uint16max + 1)
 	for i := range longName {
 		longName[i] = 'a'
@@ -103,7 +103,7 @@ func TestWriter_SetOffsetPanic(t *testing.T) {
 	}()
 	w := NewWriter(new(bytes.Buffer))
 	w.Create("test.txt")
-	w.SetOffset(100) // Должно вызвать панику
+	w.SetOffset(100) // Should cause a panic
 }
 
 func TestWriter_LongCommentError(t *testing.T) {
@@ -122,7 +122,7 @@ func TestWriter_AddFS(t *testing.T) {
 	buf := new(bytes.Buffer)
 	w := NewWriter(buf)
 
-	// Используем стандартный os.DirFS
+	// Use the standard os.DirFS
 	err := w.AddFS(os.DirFS(tmp))
 	if err != nil {
 		t.Fatalf("AddFS failed: %v", err)
@@ -136,8 +136,8 @@ func TestWriter_AddFS(t *testing.T) {
 }
 
 func TestLZMA_Decompression(t *testing.T) {
-	// Для этого теста требуется валидный поток LZMA. 
-	// Просто проверим регистрацию метода.
+	// This test requires a valid LZMA stream. 
+	// We will simply verify the method registration.
 	dcomp := decompressor(LZMA)
 	if dcomp == nil {
 		t.Fatal("LZMA decompressor not registered")
@@ -166,7 +166,7 @@ func TestWriter_AutoExtrasInjection(t *testing.T) {
 	zr, _ := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	f := zr.File[0]
 
-	// 1. Проверяем таймстемпы через 0x5455 (Extended Timestamp)
+	// 1. Checking timestamps via 0x5455 (Extended Timestamp)
 	if f.Modified.Unix() != fh.Modified.Unix() {
 		t.Errorf("Modified time mismatch: got %v, want %v", f.Modified, fh.Modified)
 	}
@@ -174,7 +174,7 @@ func TestWriter_AutoExtrasInjection(t *testing.T) {
 		t.Errorf("Accessed time mismatch: got %v, want %v", f.Accessed, fh.Accessed)
 	}
 
-	// 2. Проверяем UNIX ID через 0x7875 (Info-ZIP New Unix)
+	// 2. Verifying UNIX ID via 0x7875 (Info-ZIP New Unix)
 	uid, gid, ok := parseUnixExtra(f.Extra)
 	if !ok {
 		t.Fatal("Unix extra field (0x7875) not found in output")
@@ -184,7 +184,7 @@ func TestWriter_AutoExtrasInjection(t *testing.T) {
 	}
 }
 func TestWriter_MetadataIdempotency(t *testing.T) {
-	// Проверяем, что многократный вызов инжектора не дублирует Extra Fields
+	// Verifying that multiple calls to the injector do not duplicate Extra Fields.
 	now := time.Now().Truncate(time.Second)
 	fh := &FileHeader{
 		Name:     "idempotent.txt",
@@ -193,7 +193,7 @@ func TestWriter_MetadataIdempotency(t *testing.T) {
 		OwnerSet: true,
 	}
 
-	// Первый вызов (через создание)
+	// First Call (via Creation)
 	buf := new(bytes.Buffer)
 	zw := NewWriter(buf)
 	zw.CreateHeader(fh)
@@ -201,7 +201,7 @@ func TestWriter_MetadataIdempotency(t *testing.T) {
 
 	initialExtraLen := len(fh.Extra)
 
-	// Симулируем повторную инъекцию (например, при повторном использовании заголовка)
+	// Simulating a repeated injection (for example, when reusing a header).
 	fh.injectAutoExtras()
 	fh.injectAutoExtras()
 
@@ -213,7 +213,7 @@ func TestWriter_CDE(t *testing.T) {
 	password := "cd-secret"
 	buf := new(bytes.Buffer)
 
-	// 1. Создаем архив с зашифрованным оглавлением
+	// 1. Create an archive with an encrypted central directory
 	zw := NewWriter(buf)
 	zw.SetEncryptCentralDirectory(true, password)
 	w, _ := zw.Create("hidden.txt")
@@ -222,24 +222,24 @@ func TestWriter_CDE(t *testing.T) {
 
 	raw := buf.Bytes()
 
-	// 2. Пытаемся открыть без пароля — должно упасть при чтении заголовков
+	// 2. Try to open without a password — it should fail when reading headers
 	_, err := NewReader(bytes.NewReader(raw), int64(len(raw)))
 	if err == nil {
 		t.Error("expected error when opening CDE archive without password")
 	}
 
-	// 2.1 Пытаемся открыть с НЕВЕРНЫМ паролем
-	zrWrong := new(Reader)
-	zrWrong.SetPassword("wrong-password")
-	err = zrWrong.init(bytes.NewReader(raw), int64(len(raw)))
+	// 2.1 Try to open with an INCORRECT password
+	zrWrongPass := new(Reader)
+	zrWrongPass.SetPassword("wrong-password")
+	err = zrWrongPass.init(bytes.NewReader(raw), int64(len(raw)))
 	if err == nil || err.Error() != "zip: incorrect password" {
 		t.Errorf("expected 'incorrect password' error, got: %v", err)
 	}
 
-	// 3. Открываем с корректным паролем
+	// 3. Open with the correct password
 	zr := new(Reader)
 	zr.SetPassword(password)
-	// Прямой вызов init, так как NewReader не принимает пароль в конструктор сразу
+	// Direct call to init, as NewReader does not take a password in the constructor immediately
 	err = zr.init(bytes.NewReader(raw), int64(len(raw)))
 	if err != nil {
 		t.Fatalf("failed to open CDE archive with password: %v", err)
@@ -254,16 +254,16 @@ func TestWriter_StreamingForced(t *testing.T) {
 	buf := new(bytes.Buffer)
 	zw := NewWriter(buf)
 
-	// Симулируем стриминг через SetOffset
+	// Simulating streaming using SetOffset
 	zw.SetOffset(0)
 
 	fh := &FileHeader{Name: "stream.txt", Method: Store}
-	// Даже для Store мы можем форсировать дескриптор, если хотим абсолютный стриминг
+	// Even for a Store, we can force a descriptor if we want absolute streaming.
 	w, _ := zw.CreateHeader(fh)
 	w.Write([]byte("streaming data"))
 	zw.Close()
 
-	// Проверяем, что флаг 0x8 (Data Descriptor) установлен
+	// We verify that flag 0x8 (Data Descriptor) is set.
 	zr, _ := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	if zr.File[0].Flags&0x8 == 0 {
 		t.Error("Data Descriptor flag not set in streaming mode")

@@ -411,10 +411,10 @@ func (u *Updater) Close() error {
 	}
 	u.closed = true
 
-	// Центральный каталог должен начинаться сразу после последнего файла
+	// Central directory must start immediately after the last file
 	start := u.dirOffset
 	if u.last != nil {
-		// Если мы что-то писали, актуальный конец данных в u.dirOffset
+		// If we wrote something, the actual end of data is in u.dirOffset
 	}
 
 	if _, err := u.rw.Seek(start, io.SeekStart); err != nil {
@@ -425,7 +425,7 @@ func (u *Updater) Close() error {
 		return fmt.Errorf("zip: write directory: %w", err)
 	}
 
-	// Физически обрезаем файл до текущей позиции (конца EOCD)
+	// Physically truncate the file to the current position (end of EOCD)
 	if t, ok := u.rws.(interface{ Truncate(int64) error }); ok {
 		curr, _ := u.rw.offset()
 		return t.Truncate(curr)

@@ -2,12 +2,12 @@ package zip
 
 import "encoding/binary"
 
-// appendNtfsAcl записывает Windows Security Descriptor в тег 0x4453
+// appendNtfsAcl writes a Windows Security Descriptor to the 0x4453 tag
 func appendNtfsAcl(extra []byte, sd []byte) []byte {
 	if len(sd) == 0 {
 		return extra
 	}
-	// Формат 0x4453: [ID 2b] [Size 2b] [Data...]
+	// Format 0x4453: [ID 2b] [Size 2b] [Data...]
 	buf := make([]byte, 4+len(sd))
 	binary.LittleEndian.PutUint16(buf[0:2], ntfsAclExtraID)
 	binary.LittleEndian.PutUint16(buf[2:4], uint16(len(sd)))
@@ -15,7 +15,7 @@ func appendNtfsAcl(extra []byte, sd []byte) []byte {
 	return append(extra, buf...)
 }
 
-// parseNtfsAcl извлекает Security Descriptor
+// parseNtfsAcl extracts a Security Descriptor
 func parseNtfsAcl(extra []byte) []byte {
 	for len(extra) >= 4 {
 		tag := binary.LittleEndian.Uint16(extra[:2])

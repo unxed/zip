@@ -16,15 +16,15 @@ func TestWinZipAES_Reader(t *testing.T) {
 	data := []byte("highly confidential data")
 	salt := []byte{1, 2, 3, 4, 5, 6, 7, 8} // 8 bytes for AES-128
 
-	// 1. Подготавливаем ключи вручную (как это делает WinZip)
-	// Для AES-128 (strength 1): keyLen=16, saltLen=8
+	// 1. Prepare keys manually (imitating WinZip)
+	// For AES-128 (strength 1): keyLen=16, saltLen=8
 	keyLen := 16
 	keys := pbkdf2.Key([]byte(password), salt, 1000, keyLen*2+2, sha1.New)
 	encKey := keys[:keyLen]
 	// authKey := keys[keyLen : 2*keyLen]
 	pwVerif := keys[2*keyLen : 2*keyLen+2]
 
-	// 2. Шифруем данные
+	// 2. Encrypt the data
 	block, _ := aes.NewCipher(encKey)
 	iv := make([]byte, 16)
 	iv[0] = 1
@@ -32,15 +32,15 @@ func TestWinZipAES_Reader(t *testing.T) {
 	cipherText := make([]byte, len(data))
 	encrypter.XORKeyStream(cipherText, data)
 
-	// 3. Собираем "сырой" поток файла внутри ZIP
-	// Поток: [Salt] + [Verif] + [EncData] + [HMAC (10 bytes)]
+	// 3. Assemble the "raw" file stream inside the ZIP
+	// Stream: [Salt] + [Verif] + [EncData] + [HMAC (10 bytes)]
 	payload := new(bytes.Buffer)
 	payload.Write(salt)
 	payload.Write(pwVerif)
 	payload.Write(cipherText)
 	payload.Write(make([]byte, 10)) // HMAC dummy
 
-	// 4. Тестируем наш aesReader
+	// 4. Test our aesReader
 	info := &winzipAesInfo{
 		version:      2,
 		strength:     1, // AES-128
@@ -72,7 +72,7 @@ func TestWinZipAES_FullCycle(t *testing.T) {
 	data := []byte("this data is encrypted with AES-256")
 	buf := new(bytes.Buffer)
 
-	// 1. Записываем шифрованный файл
+	// 1. Write the encrypted file
 	zw := NewWriter(buf)
 	fh := &FileHeader{
 		Name:     "secret.txt",
@@ -87,7 +87,7 @@ func TestWinZipAES_FullCycle(t *testing.T) {
 	w.Write(data)
 	zw.Close()
 
-	// 2. Читаем и проверяем
+	// 2. Read and verify
 	zr, err := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	if err != nil {
 		t.Fatalf("NewReader failed: %v", err)

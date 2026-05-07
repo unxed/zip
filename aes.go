@@ -13,10 +13,10 @@ import (
 	"golang.org/x/crypto/pbkdf2"
 )
 
-// winzipAesInfo хранит параметры из Extra Field 0x9901
+// winzipAesInfo stores parameters from Extra Field 0x9901
 type winzipAesInfo struct {
-	version   uint16
-	strength  byte   // 1=128, 2=192, 3=256
+	version      uint16
+	strength     byte // 1=128, 2=192, 3=256
 	actualMethod uint16
 }
 
@@ -39,9 +39,9 @@ func (ar *aesReader) Read(p []byte) (int, error) {
 		ar.mac.Write(p[:n])
 	}
 	if err == io.EOF {
-		// Проверка HMAC в конце файла (в реальной жизни в ZIP это последние 10 байт потока)
-		// На текущем уровне абстракции мы просто декодируем,
-		// так как проверку HMAC лучше делать в отдельном оберточном ридере.
+		// HMAC check at the end of the file (in ZIP, these are the last 10 bytes of the stream)
+		// At this level of abstraction, we only decode,
+		// since it's better to perform HMAC verification in a separate wrapper reader.
 	}
 	return n, err
 }
@@ -63,13 +63,13 @@ func newWinZipAesReader(r io.Reader, password string, info *winzipAesInfo, compr
 		return nil, 0, err
 	}
 
-	// Вывод ключей (1000 итераций по спецификации)
+	// Key derivation (1000 iterations per specification)
 	keys := pbkdf2.Key([]byte(password), salt, 1000, keyLen*2+2, sha1.New)
 	encKey := keys[:keyLen]
 	authKey := keys[keyLen : 2*keyLen]
 	pwVerif := keys[2*keyLen : 2*keyLen+2]
 
-	// Проверка пароля
+	// Password verification
 	verifBuf := make([]byte, 2)
 	if _, err := io.ReadFull(r, verifBuf); err != nil {
 		return nil, 0, err
@@ -83,14 +83,14 @@ func newWinZipAesReader(r io.Reader, password string, info *winzipAesInfo, compr
 		return nil, 0, err
 	}
 
-	// WinZip AES использует CTR mode с IV=1 (по 16-байтным блокам)
+	// WinZip AES uses CTR mode with IV=1 (per 16-byte blocks)
 	iv := make([]byte, 16)
 	for i := range iv { iv[i] = 0 }
 	iv[0] = 1
 
 	decrypter := cipher.NewCTR(block, iv)
 
-	// Ограничиваем ридер, чтобы не зайти на HMAC (10 байт в конце)
+	// Limit the reader to avoid overrunning onto the HMAC (10 bytes at the end)
 	dataSize := compressedSize - int64(saltLen) - 2 - 10
 	if dataSize < 0 {
 		return nil, 0, errors.New("zip: encrypted data too short")

@@ -6,33 +6,33 @@ import (
 )
 
 func TestZipCrypto_Read(t *testing.T) {
-	// Это синтетический тест. Для полноценного теста нужен байтовый массив
-	// реального зашифрованного архива.
+	// This is a synthetic test. A full test requires a byte array
+	// from a real encrypted archive.
 	password := "12345"
 	data := []byte("secret message")
 
 	buf := new(bytes.Buffer)
 	zw := NewWriter(buf)
-	// В текущем Writer нет поддержки записи шифрования (она сложнее),
-	// поэтому мы проверяем только логику дешифратора.
+	// The current Writer does not support writing encryption (it's more complex),
+	// so we only test the decoder logic.
 	zw.Close()
 
-	// Проверка ключей
+	// Key verification
 	crypto := newZipCrypto([]byte(password))
 	encData := make([]byte, len(data))
 	copy(encData, data)
 
-	// Имитация процесса шифрования (алгоритм симметричен в плане updateKeys)
-	// Для записи нам нужно было бы реализовать отдельный метод,
-	// но APPNOTE говорит, что процесс идентичен.
+	// Imitation of the encryption process (the algorithm is symmetric in terms of updateKeys)
+	// To write, we would need to implement a separate method,
+	// but APPNOTE says the process is identical.
 	for i, v := range encData {
 		b := crypto.decryptByte()
 		c := v ^ b
-		crypto.updateKeys(v) // При шифровании обновляем ключи открытым байтом
+		crypto.updateKeys(v) // When encrypting, we update the keys with the plaintext byte
 		encData[i] = c
 	}
 
-	// Теперь дешифруем
+	// Now, decrypt
 	decrypto := newZipCrypto([]byte(password))
 	decrypto.decrypt(encData)
 
@@ -42,7 +42,7 @@ func TestZipCrypto_Read(t *testing.T) {
 }
 
 func TestWinZipAES_WrongPassword(t *testing.T) {
-	// Имитируем поток с солью и проверкой пароля
+	// Simulate a stream with salt and password verification
 	salt := make([]byte, 8)
 	verif := []byte{0xAA, 0xBB}
 	payload := bytes.NewReader(append(salt, verif...))

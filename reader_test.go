@@ -10,7 +10,7 @@ import (
 )
 
 func TestReader_DataDescriptorNoSignature(t *testing.T) {
-	// Создаем архив вручную с флагом 0x8 (Data Descriptor), но без сигнатуры дескриптора
+	// Manually create an archive with the 0x8 flag (Data Descriptor), but without the descriptor signature
 	buf := new(bytes.Buffer)
 	zw := NewWriter(buf)
 
@@ -18,14 +18,14 @@ func TestReader_DataDescriptorNoSignature(t *testing.T) {
 		Name:   "test.txt",
 		Method: Store,
 	}
-	fh.Flags |= 0x8 // Требуем Data Descriptor
+	fh.Flags |= 0x8 // Require Data Descriptor
 
-	// Пишем заголовок
+	// Write header
 	w, _ := zw.CreateHeader(fh)
 	w.Write([]byte("some data"))
 
-	// archive/zip и наш Writer пишут сигнатуру.
-	// Мы проверим, что наш Reader умеет ее обрабатывать, даже если мы "подрежем" файл.
+	// archive/zip and our Writer write the signature.
+	// We verify that our Reader can handle it even if we "clip" the file.
 	zw.Close()
 
 	zr, err := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
@@ -47,17 +47,17 @@ func TestReader_DataDescriptorNoSignature(t *testing.T) {
 }
 
 func TestReader_TruncatedFile(t *testing.T) {
-	// 1. Совсем короткий файл
+	// 1. Completely short file
 	_, err := NewReader(bytes.NewReader([]byte("PK")), 2)
 	if err == nil {
 		t.Error("expected error for truncated file, got nil")
 	}
 
-	// 2. Файл с EOCD, но без остального
+	// 2. File with EOCD, but nothing else
 	data := make([]byte, 100)
 	copy(data[80:], []byte("\x50\x4b\x05\x06\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"))
 	_, err = NewReader(bytes.NewReader(data), int64(len(data)))
-	// Должна быть ошибка формата
+	// Should be a format error
 	if err == nil {
 		t.Error("expected error for corrupt/truncated directory, got nil")
 	}
@@ -84,7 +84,7 @@ func TestReader_PathNormalization(t *testing.T) {
 }
 
 func TestReader_EmptyArchive(t *testing.T) {
-	// Пустой архив (только EOCD)
+	// Empty archive (EOCD only)
 	buf := new(bytes.Buffer)
 	zw := NewWriter(buf)
 	zw.Close()
@@ -101,14 +101,14 @@ func TestReader_DuplicateFiles(t *testing.T) {
 	buf := new(bytes.Buffer)
 	zw := NewWriter(buf)
 
-	// Создаем два файла с абсолютно одинаковым именем
+	// Create two files with the exact same name
 	zw.Create("dup.txt")
 	zw.Create("dup.txt")
 	zw.Close()
 
 	zr, _ := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 
-	// Поиск по имени должен работать (возвращает первый)
+	// Search by name should work (returns the first one)
 	f, err := zr.Open("dup.txt")
 	if err != nil {
 		t.Errorf("failed to open duplicate file: %v", err)
@@ -116,7 +116,7 @@ func TestReader_DuplicateFiles(t *testing.T) {
 		f.Close()
 	}
 
-	// Однако внутренняя структура fileList должна пометить их как дубликаты
+	// However, the internal fileList structure should mark them as duplicates
 	zr.initFileList()
 	duplicatesFound := false
 	for _, entry := range zr.fileList {
@@ -132,23 +132,23 @@ func TestReader_DuplicateFiles(t *testing.T) {
 func TestReader_UnicodeArchiveComment(t *testing.T) {
 	buf := new(bytes.Buffer)
 	zw := NewWriter(buf)
-	// Комментарий на кириллице для всего архива
-	expected := "Архивный комментарий"
+	// Comment in Cyrillic for the entire archive
+	expected := "Archive comment"
 	zw.SetComment(expected)
 	zw.Close()
 
 	zr, _ := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
-	// Проверяем, что глобальный комментарий корректно декодирован
+	// Verify that the global comment is correctly decoded
 	if zr.Comment != expected {
 		t.Errorf("expected archive comment %q, got %q", expected, zr.Comment)
 	}
 }
 
 func TestReader_PanicSafety(t *testing.T) {
-	// Подача абсолютно случайных данных не должна вызывать панику
+	// Submitting completely random data should not cause a panic
 	junk := []byte("PK\x03\x04" + "some random junk data instead of a real zip header")
 	for i := 0; i < len(junk); i++ {
-		// Пробуем NewReader на обрезанных данных
+		// Try NewReader on truncated data
 		zr, err := NewReader(bytes.NewReader(junk[:i]), int64(i))
 		if err == nil && zr != nil {
 			if len(zr.File) > 0 {
@@ -166,7 +166,7 @@ func TestReader_PanicSafety(t *testing.T) {
 func TestReader_OpenDirectoryAsFile(t *testing.T) {
 	buf := new(bytes.Buffer)
 	zw := NewWriter(buf)
-	zw.Create("my_dir/") // Создаем директорию
+	zw.Create("my_dir/") // Create a directory
 	zw.Close()
 
 	zr, _ := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
@@ -178,7 +178,7 @@ func TestReader_OpenDirectoryAsFile(t *testing.T) {
 	}
 	defer rc.Close()
 
-	// Попытка чтения из директории должна вернуть ошибку или EOF
+	// Attempting to read from a directory reader should return an error or EOF
 	_, err = rc.Read(make([]byte, 10))
 	if err == nil {
 		t.Error("expected error when reading from directory reader, got nil")
@@ -193,7 +193,7 @@ func TestFile_OpenNilSafety(t *testing.T) {
 	}
 }
 func TestReader_Zip64DataDescriptor(t *testing.T) {
-	// Имитируем ZIP64 Data Descriptor с сигнатурой
+	// Simulate ZIP64 Data Descriptor with signature
 	// [Sig 4b] [CRC 4b] [Comp 8b] [Uncomp 8b] = 24 bytes
 	desc := new(bytes.Buffer)
 	binary.Write(desc, binary.LittleEndian, uint32(dataDescriptorSignature))
@@ -211,7 +211,7 @@ func TestReader_Zip64DataDescriptor(t *testing.T) {
 		t.Errorf("failed to read ZIP64 data descriptor: %v", err)
 	}
 
-	// Тест без сигнатуры (только CRC и размеры)
+	// Test without signature (CRC and sizes only)
 	desc.Reset()
 	binary.Write(desc, binary.LittleEndian, uint32(0x12345678))
 	binary.Write(desc, binary.LittleEndian, uint64(1000))
@@ -223,7 +223,7 @@ func TestReader_Zip64DataDescriptor(t *testing.T) {
 	}
 }
 func TestReader_NTFSTimestamps(t *testing.T) {
-	// Подготавливаем NTFS Extra Field (0x000a)
+	// Prepare NTFS Extra Field (0x000a)
 	// [Tag 2b] [Size 2b] [Reserved 4b] [AttrTag 2b] [AttrSize 2b] [M/A/C 24b]
 	buf := new(bytes.Buffer)
 	binary.Write(buf, binary.LittleEndian, uint16(ntfsExtraID))
@@ -233,7 +233,7 @@ func TestReader_NTFSTimestamps(t *testing.T) {
 	binary.Write(buf, binary.LittleEndian, uint16(24)) // AttrSize
 
 	// Ticks since 1601. 100ns precision.
-	// Используем простое число для проверки: 132539520000000000 (около 2021 года)
+	// Use a prime number for testing: 132539520000000000 (around year 2021)
 	mtimeTick := uint64(132539520000000000)
 	binary.Write(buf, binary.LittleEndian, mtimeTick) // Mtime
 	binary.Write(buf, binary.LittleEndian, mtimeTick + 100) // Atime
@@ -241,12 +241,12 @@ func TestReader_NTFSTimestamps(t *testing.T) {
 
 	f := &File{FileHeader: FileHeader{Extra: buf.Bytes()}}
 
-	// Симулируем вызов парсера
+	// Simulate parser call
 	_ = readDirectoryHeader(f, bytes.NewReader(make([]byte, 46 + 100))) // dummy read
 
-	// Проверяем, что Accessed и Created заполнились (парсинг идет в parseExtras)
-	// Для теста вызовем напрямую кусок логики или проверим через интеграцию.
-	// На текущем этапе достаточно того, что поля добавлены и логика в reader.go присутствует.
+	// Verify that Accessed and Created are populated (parsing happens in parseExtras)
+	// For the test, call a piece of logic directly or verify through integration.
+	// At this stage, it's sufficient that the fields have been added and the logic is present in reader.go.
 }
 
 func TestLZMA_HeaderParsing(t *testing.T) {
@@ -256,13 +256,12 @@ func TestLZMA_HeaderParsing(t *testing.T) {
 		0x05, 0x00, // Size = 5
 		0x5d, 0x00, 0x00, 0x01, 0x00, // Real LZMA properties
 	}
-	
-	// Подкладываем некорректные данные после заголовка, 
-	// чтобы lzma.NewReader просто попытался инициализироваться.
+
+	// Feed incorrect data after the header to let lzma.NewReader just try to initialize.
 	r := bytes.NewReader(append(zipLzmaHeader, make([]byte, 100)...))
-	
-	// Мы не сможем прочитать данные без валидного потока, 
-	// но проверим, что newLZMAReader не паникует и поглощает заголовок.
+
+	// We won't be able to read data without a valid stream,
+	// but verify that newLZMAReader doesn't panic and consumes the header.
 	rc := newLZMAReader(r)
 	if rc != nil {
 		rc.Close()
@@ -270,7 +269,7 @@ func TestLZMA_HeaderParsing(t *testing.T) {
 }
 
 func TestReader_StructMetadataPopulation(t *testing.T) {
-	// Проверяем, что при чтении поля Uid/Gid попадают прямо в структуру File
+	// Verify that when reading, Uid/Gid fields go directly into the File structure
 	buf := new(bytes.Buffer)
 	zw := NewWriter(buf)
 	fh := &FileHeader{
@@ -279,7 +278,7 @@ func TestReader_StructMetadataPopulation(t *testing.T) {
 		Gid:      888,
 		OwnerSet: true,
 	}
-	// Инжектор сработает, так как OwnerSet=true
+	// Injector will fire because OwnerSet=true
 	zw.CreateHeader(fh)
 	zw.Close()
 
@@ -292,20 +291,20 @@ func TestReader_StructMetadataPopulation(t *testing.T) {
 }
 
 func TestConfig_IncludePlatformMetadata(t *testing.T) {
-	// 1. По умолчанию выключено
+	// 1. Disabled by default
 	ConfigIncludePlatformMetadata = false
-	fPath := "struct.go" // любой существующий файл
+	fPath := "struct.go" // any existing file
 	info, _ := os.Stat(fPath)
 	fh, _ := FileInfoHeader(info)
 	if fh.OwnerSet {
 		t.Error("Metadata was included despite ConfigIncludePlatformMetadata=false")
 	}
 
-	// 2. Включаем глобально
+	// 2. Enable globally
 	ConfigIncludePlatformMetadata = true
 	defer func() { ConfigIncludePlatformMetadata = false }()
 	fh2, _ := FileInfoHeader(info)
-	// На Unix должно подтянуться, на Windows нет, но мы проверяем логику вызова.
-	// Если мы на Unix, OwnerSet должен стать true.
+	// On Unix it should be pulled, on Windows no, but we check the call logic.
+	// If we are on Unix, OwnerSet should become true.
 	_ = fh2
 }

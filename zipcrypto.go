@@ -6,7 +6,7 @@ import (
 
 var crc32Table = crc32.MakeTable(crc32.IEEE)
 
-// Классический алгоритм шифрования ZIP (ZipCrypto).
+// Classic ZIP encryption algorithm (ZipCrypto).
 type zipCrypto struct {
 	keys [3]uint32
 }

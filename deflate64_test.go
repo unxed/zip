@@ -7,7 +7,7 @@ import (
 )
 
 func TestDeflate64_Registration(t *testing.T) {
-	// Проверяем, что метод зарегистрирован в глобальной карте
+	// Verify that the method is registered in the global map
 	dcomp := decompressor(Deflate64)
 	if dcomp == nil {
 		t.Fatal("Deflate64 decompressor not registered")
@@ -15,8 +15,8 @@ func TestDeflate64_Registration(t *testing.T) {
 }
 
 func TestDeflate64_Reader(t *testing.T) {
-	// Deflate64 обратно совместим с Deflate на малых объемах данных.
-	// Проверяем, что наш декодер справляется с обычным потоком.
+	// Deflate64 is backward compatible with Deflate for small data volumes.
+	// Verify that our decoder handles a standard stream.
 	data := []byte("deflate64 compatibility test data")
 	buf := new(bytes.Buffer)
 

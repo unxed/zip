@@ -89,20 +89,20 @@ func TestZstd_CorruptedData(t *testing.T) {
 		t.Fatalf("failed to read valid zip: %v", err)
 	}
 
-	// Находим точное смещение начала сжатых данных
+	// Find the exact offset of the start of the compressed data
 	offset, err := zr.File[0].DataOffset()
 	if err != nil {
 		t.Fatalf("failed to get data offset: %v", err)
 	}
 
-	// Портим именно сжатые данные, не трогая заголовки
+	// Corrupt specifically the compressed data, without touching the headers
 	for i := offset; i < offset+5 && i < int64(len(raw)); i++ {
 		raw[i] = 0xAA
 	}
 
 	rc, err := zr.File[0].Open()
 	if err != nil {
-		// Ошибка может возникнуть уже здесь при инициализации декомпрессора
+		// An error might occur right here during decompressor initialization
 		return
 	}
 	defer rc.Close()
@@ -120,7 +120,7 @@ func TestZstd_WithDataDescriptor(t *testing.T) {
 		Name:   "dd.zstd",
 		Method: ZSTD,
 	}
-	fh.Flags |= 0x8 // Принудительно включаем Data Descriptor
+	fh.Flags |= 0x8 // Force enable Data Descriptor
 
 	w, _ := zw.CreateHeader(fh)
 	w.Write([]byte("zstd data with descriptor"))
@@ -141,7 +141,7 @@ func TestRegister_Panics(t *testing.T) {
 			t.Errorf("expected panic when registering duplicate method")
 		}
 	}()
-	// Метод 8 (Deflate) уже зарегистрирован в init()
+	// Method 8 (Deflate) is already registered in init()
 	RegisterCompressor(Deflate, nil)
 }
 
@@ -155,16 +155,16 @@ func TestDecompressor_Panics(t *testing.T) {
 }
 
 func TestPPMd_HeaderParsing(t *testing.T) {
-	// Имитируем 2 байта заголовка PPMd
+	// Simulate 2 bytes of the PPMd header
 	// Order=8 (val 7), Mem=50MB (val 49)
 	// 7 + (49 << 4) = 7 + 784 = 791 (0x0317)
 	header := []byte{0x17, 0x03}
-	
+
 	r := bytes.NewReader(header)
-	// newPPMdReader попытается инициализировать библиотеку. 
-	// Проверяем, что нет паники при чтении свойств.
+	// newPPMdReader will attempt to initialize the library.
+	// Verify that there is no panic when reading properties.
 	rc := newPPMdReader(r, 1000)
 	if rc != nil {
-		// Ожидаем ошибку или пустой результат, так как данных после заголовка нет
+		// Wait for error or empty result as there is no data after the header
 	}
 }

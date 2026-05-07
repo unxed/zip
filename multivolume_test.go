@@ -10,7 +10,7 @@ import (
 func TestMultiVolumeReader_ReadAt(t *testing.T) {
 	tmp := t.TempDir()
 
-	// Создаем два тома: .z01 (5 байт) и .zip (5 байт)
+	// Create two volumes: .z01 (5 bytes) and .zip (5 bytes)
 	vol1Path := filepath.Join(tmp, "test.z01")
 	zipPath := filepath.Join(tmp, "test.zip")
 
@@ -27,9 +27,9 @@ func TestMultiVolumeReader_ReadAt(t *testing.T) {
 		t.Errorf("expected size 10, got %d", size)
 	}
 
-	// Тест чтения на границе томов
+	// Test reading at the volume boundary
 	buf := make([]byte, 4)
-	n, err := ra.ReadAt(buf, 3) // Должен прочитать '45' из первого и '67' из второго
+	n, err := ra.ReadAt(buf, 3) // Should read '45' from the first and '67' from the second
 	if err != nil && err != io.EOF {
 		t.Fatalf("ReadAt error: %v", err)
 	}

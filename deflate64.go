@@ -5,9 +5,9 @@ import (
 	"github.com/klauspost/compress/flate"
 )
 
-// deflate64Reader адаптирует klauspost/compress для поддержки Deflate64
-// klauspost/compress — одна из немногих библиотек на Go, которая умеет
-// работать с окном более 32КБ, если её правильно инициализировать.
+// deflate64Reader adapts klauspost/compress to support Deflate64
+// klauspost/compress is one of the few Go libraries capable of
+// handling a window larger than 32KB if initialized correctly.
 type deflate64Reader struct {
 	r io.ReadCloser
 }
@@ -28,7 +28,7 @@ func (dr *deflate64Reader) Close() error {
 	return dr.r.Close()
 }
 
-// Заглушка для компиляции, если мы решим использовать сторонний ассемблерный код
+// Stub for compilation if we decide to use third-party assembly code
 func decodeDeflate64(r io.Reader) io.ReadCloser {
 	return newDeflate64Reader(r)
 }

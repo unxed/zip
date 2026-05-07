@@ -201,16 +201,16 @@ func init() {
 }
 
 func newPPMdReader(r io.Reader, size uint64) io.ReadCloser {
-	// APPNOTE 5.10.3: Параметры PPMd хранятся в первых 2 байтах данных.
+	// APPNOTE 5.10.3: PPMd parameters are stored in the first 2 bytes of the data.
 	props := make([]byte, 2)
 	if _, err := io.ReadFull(r, props); err != nil {
 		return nil
 	}
 	val := binary.LittleEndian.Uint16(props)
 
-	// Разбор параметров:
+	// Parameter parsing:
 	// Order: bits 0-3 (+1)
-	// MemSize: bits 4-11 (+1) в МБ
+	// MemSize: bits 4-11 (+1) in MB
 	// Restoration: bits 12-15
 	order := int(val&0xF) + 1
 	memSize := (int((val>>4)&0xFF) + 1)
@@ -222,10 +222,10 @@ func newPPMdReader(r io.Reader, size uint64) io.ReadCloser {
 	return io.NopCloser(&rd)
 }
 func newLZMAReader(r io.Reader) io.ReadCloser {
-	// APPNOTE 5.8.8: LZMA Properties Header в ZIP:
-	// 2 байта - LZMA Version
-	// 2 байта - Properties Size (обычно 5)
-	// N байт - Properties Data (1 байт параметров + 4 байта размера словаря)
+	// APPNOTE 5.8.8: LZMA Properties Header in ZIP:
+	// 2 bytes - LZMA Version
+	// 2 bytes - Properties Size (usually 5)
+	// N bytes - Properties Data (1 byte of parameters + 4 bytes of dictionary size)
 
 	meta := make([]byte, 4)
 	if _, err := io.ReadFull(r, meta); err != nil {
@@ -234,7 +234,7 @@ func newLZMAReader(r io.Reader) io.ReadCloser {
 
 	propSize := int(binary.LittleEndian.Uint16(meta[2:4]))
 	if propSize != 5 {
-		// Для ZIP Method 14 по спецификации ожидается 5 байт LZMA1 свойств.
+		// For ZIP Method 14, 5 bytes of LZMA1 properties are expected per specification.
 		return nil
 	}
 
@@ -243,12 +243,12 @@ func newLZMAReader(r io.Reader) io.ReadCloser {
 		return nil
 	}
 
-	// Библиотека ulikunitz/xz/lzma ожидает классический .lzma заголовок (13 байт):
+	// The ulikunitz/xz/lzma library expects a classic .lzma header (13 bytes):
 	// [1b props][4b dict size][8b uncompressed size]
 	fullHeader := make([]byte, 13)
 	copy(fullHeader[0:5], props)
 	for i := 0; i < 8; i++ {
-		// Указываем 0xFF, что значит "размер неизвестен, читать до EOS маркера"
+		// Set to 0xFF, meaning "size unknown, read until EOS marker"
 		fullHeader[5+i] = 0xFF
 	}
 
@@ -257,8 +257,8 @@ func newLZMAReader(r io.Reader) io.ReadCloser {
 	if err != nil {
 		return nil
 	}
-	// lzma.Reader из этого пакета не реализует Close, так как работает с потоком.
-	// Оборачиваем в NopCloser.
+	// lzma.Reader from this package does not implement Close as it works with the stream.
+	// Wrap in NopCloser.
 	return io.NopCloser(rd)
 }
 func RegisterDecompressor(method uint16, dcomp Decompressor) {

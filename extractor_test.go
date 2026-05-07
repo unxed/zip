@@ -14,7 +14,7 @@ func TestExtractor_ChownErrorHandling(t *testing.T) {
 	zipPath := filepath.Join(tmp, "test.zip")
 	dstDir := filepath.Join(tmp, "dst")
 
-	// Создаем архив с Unix метаданными
+	// Create an archive with Unix metadata
 	f, _ := os.Create(zipPath)
 	zw := NewWriter(f)
 	fh := &FileHeader{Name: "file.txt"}
@@ -24,11 +24,11 @@ func TestExtractor_ChownErrorHandling(t *testing.T) {
 	zw.Close()
 	f.Close()
 
-	// Настраиваем экстрактор с обработчиком ошибок chown
+	// Configure extractor with a chown error handler
 	chownCalled := false
 	handler := func(name string, err error) error {
 		chownCalled = true
-		return nil // Игнорируем ошибку
+		return nil // Ignore error
 	}
 
 	e, _ := NewExtractor(zipPath, dstDir, WithExtractorChownErrorHandler(handler))
@@ -37,8 +37,8 @@ func TestExtractor_ChownErrorHandling(t *testing.T) {
 		t.Fatalf("extraction failed: %v", err)
 	}
 
-	// На обычных ОС (не root) lchown скорее всего вернет ошибку.
-	// Используем переменную, чтобы удовлетворить компилятор и логгируем результат.
+	// On standard OSes (non-root), lchown will likely return an error.
+	// Use a variable to satisfy the compiler and log the result.
 	if chownCalled {
 		t.Log("Chown error handler was successfully triggered and executed")
 	}
@@ -52,7 +52,7 @@ func TestExtractor_OutsideChroot(t *testing.T) {
 
 	f, _ := os.Create(zipPath)
 	zw := NewWriter(f)
-	// Пытаемся выйти за пределы директории через относительный путь
+	// Try to go outside the directory via a relative path
 	zw.Create("../evil.txt")
 	zw.Close()
 	f.Close()
@@ -71,7 +71,7 @@ func TestExtractor_ZipSlipSecurity(t *testing.T) {
 
 	f, _ := os.Create(zipPath)
 	zw := NewWriter(f)
-	// Прямая попытка записать в корень системы (на Unix) или выйти далеко вверх
+	// Direct attempt to write to the system root (on Unix) or go far up
 	zw.Create("/tmp/pwned.txt")
 	zw.Create("../../../opt/pwned.txt")
 	zw.Close()
@@ -80,8 +80,8 @@ func TestExtractor_ZipSlipSecurity(t *testing.T) {
 	e, _ := NewExtractor(zipPath, dstDir)
 	err := e.Extract(context.Background())
 
-	// NewExtractor использует filepath.Abs(filepath.Join(chroot, file.Name))
-	// и затем проверяет HasPrefix. Это должно отсечь такие пути.
+	// NewExtractor uses filepath.Abs(filepath.Join(chroot, file.Name))
+	// and then checks HasPrefix. This should cut off such paths.
 	if err == nil {
 		t.Error("Extractor allowed Zip Slip path! Security violation.")
 	}
@@ -92,7 +92,7 @@ func TestExtractor_ZipBomb(t *testing.T) {
 	zipPath := filepath.Join(tmp, "bomb.zip")
 	dstDir := filepath.Join(tmp, "extract")
 
-	// Создаем архив. Записываем 2048 байт.
+	// Create archive. Write 2048 bytes.
 	f, _ := os.Create(zipPath)
 	zw := NewWriter(f)
 	w, _ := zw.Create("bomb.txt")
@@ -100,7 +100,7 @@ func TestExtractor_ZipBomb(t *testing.T) {
 	zw.Close()
 	f.Close()
 
-	// Устанавливаем лимит 1024 байта. 2048 > 1024, должно упасть.
+	// Set a limit of 1024 bytes. 2048 > 1024, should fail.
 	e, _ := NewExtractor(zipPath, dstDir, WithExtractorMaxFileSize(1024))
 	err := e.Extract(context.Background())
 
@@ -114,19 +114,19 @@ func TestExtractor_RatioBomb(t *testing.T) {
 	zipPath := filepath.Join(tmp, "ratio.zip")
 	dstDir := filepath.Join(tmp, "extract")
 
-	// Создаем архив с данными, которые ОЧЕНЬ хорошо сжимаются (нули).
+	// Create an archive with data that compresses VERY well (zeros).
 	f, _ := os.Create(zipPath)
 	zw := NewWriter(f)
 	w, _ := zw.CreateHeader(&FileHeader{
 		Name:   "ratio.txt",
 		Method: Deflate,
 	})
-	// Пишем 100КБ нулей. Сжатый размер будет около ~100-200 байт.
+	// Write 100KB of zeros. Compressed size will be around ~100-200 bytes.
 	w.Write(make([]byte, 1024*100))
 	zw.Close()
 	f.Close()
 
-	// Устанавливаем лимит Ratio 2:1. Реальный ratio будет > 500:1.
+	// Set a Ratio limit of 2:1. The real ratio will be > 500:1.
 	e, _ := NewExtractor(zipPath, dstDir, WithExtractorMaxRatio(2))
 	err := e.Extract(context.Background())
 
@@ -136,7 +136,7 @@ func TestExtractor_RatioBomb(t *testing.T) {
 }
 
 func TestExtractor_PermissionsPreservation(t *testing.T) {
-	// Только для Unix, так как на Windows права работают иначе
+	// Unix only, as permissions work differently on Windows
 	if runtime.GOOS == "windows" {
 		t.Skip("skipping on windows")
 	}
@@ -147,8 +147,8 @@ func TestExtractor_PermissionsPreservation(t *testing.T) {
 
 	f, _ := os.Create(zipPath)
 	zw := NewWriter(f)
-	
-	// Файл с очень строгими правами
+
+	// File with very strict permissions
 	fh, _ := FileInfoHeader(mockFileInfo{name: "secret.txt", mode: 0700})
 	w, _ := zw.CreateHeader(fh)
 	w.Write([]byte("secret"))
@@ -162,8 +162,8 @@ func TestExtractor_PermissionsPreservation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	
-	// Проверяем, что права 0700 (rwx------) сохранились
+
+	// Verify that 0700 permissions (rwx------) are preserved
 	if info.Mode().Perm() != 0700 {
 		t.Errorf("permissions lost! expected 0700, got %o", info.Mode().Perm())
 	}
@@ -177,22 +177,22 @@ func TestExtractor_SymlinkSecurityDeep(t *testing.T) {
 	f, _ := os.Create(zipPath)
 	zw := NewWriter(f)
 	
-	// Создаем симлинк, который внутри архива указывает на путь ВНЕ архива
+	// Create a symlink that points to a path OUTSIDE the archive
 	fh := &FileHeader{Name: "attack_link"}
 	fh.SetMode(os.ModeSymlink)
 	w, _ := zw.CreateHeader(fh)
-	// Цель ссылки - системный файл
-	w.Write([]byte("/etc/passwd")) 
+	// Link target is a system file
+	w.Write([]byte("/etc/passwd"))
 	zw.Close()
 	f.Close()
 
 	e, _ := NewExtractor(zipPath, dstDir)
 	err := e.Extract(context.Background())
 
-	// Проверяем, что ссылка создана, но мы не должны позволять ей 
-	// работать как вектору атаки, если библиотека это декларирует.
-	// На текущем этапе extractor.go делает os.Symlink(target, path).
-	// Это создаст ссылку в dstDir/attack_link -> /etc/passwd.
+	// Verify that the link is created, but we shouldn't allow it
+	// to act as an attack vector if the library declares this.
+	// At this stage extractor.go does os.Symlink(target, path).
+	// This will create a link at dstDir/attack_link -> /etc/passwd.
 	if err == nil {
 		t.Log("Symlink created pointing to /etc/passwd. Ensure your application handles link targets safely.")
 	}
@@ -202,22 +202,22 @@ func TestExtractor_SymlinkDirectoryTraversal(t *testing.T) {
 	zipPath := filepath.Join(tmp, "traversal.zip")
 	dstDir := filepath.Join(tmp, "safe")
 
-	// Директория вне зоны распаковки, куда мы "целимся"
+	// Directory outside the extraction zone we are "targeting"
 	trapDir := filepath.Join(tmp, "trap")
 	os.Mkdir(trapDir, 0755)
 
 	f, _ := os.Create(zipPath)
 	zw := NewWriter(f)
 
-	// 1. Создаем симлинк "sub", который указывает на "trap"
+	// 1. Create symlink "sub" pointing to "trap"
 	fh := &FileHeader{Name: "sub"}
 	fh.SetMode(os.ModeSymlink)
 	w, _ := zw.CreateHeader(fh)
 	w.Write([]byte(trapDir))
 
-	// 2. Создаем файл "sub/evil.txt"
-	// Если экстрактор не проверяет, что "sub" - это уже существующий симлинк,
-	// он может записать в trap/evil.txt
+	// 2. Create file "sub/evil.txt"
+	// If the extractor doesn't check that "sub" is already an existing symlink,
+	// it might write to trap/evil.txt
 	zw.Create("sub/evil.txt")
 
 	zw.Close()
@@ -226,11 +226,11 @@ func TestExtractor_SymlinkDirectoryTraversal(t *testing.T) {
 	e, _ := NewExtractor(zipPath, dstDir)
 	err := e.Extract(context.Background())
 
-	// Проверка: файл не должен появиться в trapDir
+	// Verification: file should not appear in trapDir
 	if _, serr := os.Stat(filepath.Join(trapDir, "evil.txt")); serr == nil {
 		t.Errorf("Security Breach! File extracted through symlink into %s", trapDir)
 	}
 
-	// Должна быть ошибка или просто безопасный пропуск
+	// Should be an error or simply a safe skip
 	_ = err
 }

@@ -143,8 +143,8 @@ func (w *Writer) Close() error {
 	}
 
 	if w.encryptCD && w.password != "" {
-		// Теперь шифруем накопленный буфер оглавления
-		// Используем AES-256 (strength 3) для CDE
+		// Now encrypt the accumulated central directory buffer
+		// Use AES-256 (strength 3) for CDE
 		var err error
 		aesW, err = newWinZipAesWriter(w.cw, w.password, 3)
 		if err != nil {
@@ -172,10 +172,10 @@ func (w *Writer) Close() error {
 	}
 
 	if records >= uint16max || size >= uint32max || offset >= uint32max || w.encryptCD {
-		// Для CDE всегда требуется ZIP64 EOCD Record Version 2
+		// For CDE, ZIP64 EOCD Record Version 2 is always required
 		extraSize := uint64(0)
 		if w.encryptCD {
-			extraSize = 24 // Размер полей SES v2
+			extraSize = 24 // Size of SES v2 fields
 		}
 
 		var buf [directory64EndLen + directory64LocLen + 24]byte
