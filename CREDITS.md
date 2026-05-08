@@ -38,3 +38,5 @@ The in-place ZIP updating logic (`updater.go`) and the concept of `APPEND_MODE_O
 
 The heuristic algorithm and locale mapping tables for resolving legacy ZIP file encoding (Mojibake) in `charset.go` are directly ported from the C++ implementation used in 7-zip and far2l.
 
+Since the author of this library and the author of this algorithm in 7-Zip and far2l is the same person, is may be licensed also under the 3-clause BSD license for use in this project, which I, Ivan Sorokin AKA unxed, hereby do.
+
