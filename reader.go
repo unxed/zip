@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"github.com/unxed/zipcharset"
 )
 
 var (
@@ -424,8 +425,8 @@ func readDirectoryHeader(f *File, r io.Reader) error {
 	packOS := byte(f.CreatorVersion >> 8)
 	packVer := f.CreatorVersion & 0xFF
 
-	f.Name = decodeText(rawName, isUTF8, packOS, packVer, f.Extra, false)
-	f.Comment = decodeText(rawComment, isUTF8, packOS, packVer, f.Extra, true)
+	f.Name = zipcharset.DecodeText(rawName, isUTF8, packOS, packVer, f.Extra, false)
+	f.Comment = zipcharset.DecodeText(rawComment, isUTF8, packOS, packVer, f.Extra, true)
 
 	utf8Valid1, utf8Require1 := detectUTF8(f.Name)
 	utf8Valid2, utf8Require2 := detectUTF8(f.Comment)
