@@ -200,8 +200,10 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 			dumpdirContent := strings.Join(list, "\n") + "\n"
 
 			fh := &FileHeader{
-				Name:   ".zip_dumpdir",
-				Method: Store,
+				Name:               ".zip_dumpdir",
+				Method:             Store,
+				UncompressedSize64: uint64(len(dumpdirContent)),
+				CompressedSize64:   uint64(len(dumpdirContent)),
 			}
 			innerW, err := innerZw.CreateHeader(fh)
 			if err != nil {
@@ -491,7 +493,9 @@ func (a *Archiver) compressFile(ctx context.Context, f *os.File, fi os.FileInfo,
 		return err
 	}
 
-	hdr.Flags |= 0x8
+	if !a.zw.forceNoDescriptor {
+		hdr.Flags |= 0x8
+	}
 	hdr.CompressedSize64 = tmp.Written()
 	if hdr.CompressedSize64 > hdr.UncompressedSize64 {
 		f.Seek(0, io.SeekStart)
@@ -544,6 +548,10 @@ func (a *Archiver) createHeaderRaw(fi os.FileInfo, fh *FileHeader) (io.Writer, e
 	fh.ReaderVersion = zipVersion20
 
 	fh.injectAutoExtras()
+
+	if a.zw.forceNoDescriptor {
+		fh.Flags &^= 0x8
+	}
 
 	return a.zw.CreateRaw(fh)
 }

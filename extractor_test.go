@@ -2,12 +2,13 @@ package zip
 
 import (
 	"context"
-    "time"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
-	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestExtractor_ChownErrorHandling(t *testing.T) {
@@ -536,7 +537,7 @@ func TestSolidAndIncremental_Zip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a, err := NewArchiver(f, srcDir, WithArchiverSolid(true), WithArchiverIncremental(true), WithArchiverMethod(ZSTD))
+	a, err := NewArchiver(f, srcDir, WithArchiverSolid(true), WithArchiverIncremental(true), WithArchiverMethod(Deflate))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -577,7 +578,7 @@ func TestSolidAndIncremental_Zip(t *testing.T) {
 	os.Remove(zipPath)
 
 	f2, _ := os.Create(zipPath)
-	a2, _ := NewArchiver(f2, srcDir, WithArchiverSolid(true), WithArchiverIncremental(true), WithArchiverMethod(ZSTD))
+	a2, _ := NewArchiver(f2, srcDir, WithArchiverSolid(true), WithArchiverIncremental(true), WithArchiverMethod(Deflate))
 
 	filesMap2 := make(map[string]os.FileInfo)
 	filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
@@ -607,6 +608,85 @@ func TestSolidAndIncremental_Zip(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dstDir, "deleted.txt")); !os.IsNotExist(err) {
 		t.Errorf("file 'deleted.txt' was not deleted during incremental restore")
+	}
+
+	// 5. Проверяем совместимость со стандартной утилитой unzip (если она доступна в системе)
+	if unzipPath, err := exec.LookPath("unzip"); err == nil {
+
+		unzipDst := filepath.Join(tmpDir, "unzip_dst")
+		os.MkdirAll(unzipDst, 0755)
+
+		cmd := exec.Command(unzipPath, zipPath, "-d", unzipDst)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("Native unzip extraction of outer ZIP failed: %v, output: %s", err, string(output))
+		}
+
+		innerZipPath := filepath.Join(unzipDst, "solid.zip")
+		unzipInnerDst := filepath.Join(unzipDst, "inner")
+		os.MkdirAll(unzipInnerDst, 0755)
+
+		cmdInner := exec.Command(unzipPath, innerZipPath, "-d", unzipInnerDst)
+		if output, err := cmdInner.CombinedOutput(); err != nil {
+			t.Fatalf("Native unzip extraction of inner ZIP failed: %v, output: %s", err, string(output))
+		}
+
+		data, err := os.ReadFile(filepath.Join(unzipInnerDst, "stay.txt"))
+		if err != nil {
+			t.Fatalf("Failed to read stay.txt extracted by native unzip: %v", err)
+		}
+		if string(data) != "stay data" {
+			t.Errorf("Content mismatch in file extracted by native unzip: expected 'stay data', got %q", string(data))
+		}
+		t.Log("[DEBUG TEST] Native unzip compatibility verified successfully!")
+	} else {
+		t.Log("[DEBUG TEST] Native unzip utility not found on this system. Skipping external compatibility check.")
+	}
+}
+
+func TestSolidFallback_Zip(t *testing.T) {
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "fallback.zip")
+	dstDir := filepath.Join(tmpDir, "dst")
+
+	f, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := NewWriter(f)
+
+	hdr := &FileHeader{
+		Name:   "solid.zip",
+		Method: Store,
+	}
+	w, _ := zw.CreateHeader(hdr)
+
+	// Создаем внутренний архиватор с forceNoDescriptor = false (имитируя стороннюю утилиту)
+	innerZw := NewWriter(w)
+
+	innerW, _ := innerZw.Create("test.txt")
+	innerW.Write([]byte("some fallback data"))
+	innerZw.Close()
+
+	zw.Close()
+	f.Close()
+
+	// Извлекаем. Потоковая распаковка должна завершиться ошибкой,
+	// автоматически вызвав двухпроходный fallback-режим.
+	e, err := NewExtractor(zipPath, dstDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Extract(context.Background()); err != nil {
+		t.Fatalf("Solid extraction fallback failed: %v", err)
+	}
+	e.Close()
+
+	data, err := os.ReadFile(filepath.Join(dstDir, "test.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "some fallback data" {
+		t.Errorf("expected 'some fallback data', got %q", string(data))
 	}
 }
 

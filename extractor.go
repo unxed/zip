@@ -2,10 +2,12 @@ package zip
 
 import (
 	"bufio"
-    "bytes"
+	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
+    "io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -291,65 +293,279 @@ func (e *Extractor) Written() (bytes, entries int64) {
 
 func (e *Extractor) Extract(ctx context.Context) (err error) {
 	if len(e.zr.File) == 1 && (e.zr.File[0].Name == "solid.zip" || strings.HasSuffix(e.zr.File[0].Name, ".solid")) {
-		tempFile, err := os.CreateTemp("", "solid_zip_*.zip")
-		if err != nil {
-			return err
-		}
-		defer os.Remove(tempFile.Name())
-		defer tempFile.Close()
-
 		r, err := e.zr.File[0].Open()
 		if err != nil {
 			return err
 		}
-		_, err = io.Copy(tempFile, r)
-		r.Close()
+		defer r.Close()
+
+		err = e.extractSolidStream(r, ctx)
 		if err != nil {
+			tempFile, terr := os.CreateTemp("", "solid_fallback_*.zip")
+			if terr != nil {
+				return err
+			}
+			defer os.Remove(tempFile.Name())
+			defer tempFile.Close()
+
+			r2, terr := e.zr.File[0].Open()
+			if terr != nil {
+				return err
+			}
+			_, terr = io.Copy(tempFile, r2)
+			r2.Close()
+			if terr != nil {
+				return err
+			}
+
+			innerOpts := []ExtractorOption{
+				WithExtractorConcurrency(e.options.concurrency),
+				WithExtractorChownErrorHandler(e.options.chownErrorHandler),
+				WithExtractorMaxFileSize(e.options.maxFileSize),
+				WithExtractorMaxRatio(e.options.maxDecompressionRatio),
+				WithExtractorXattrs(e.options.xattrs),
+				WithExtractorKeepBroken(e.options.keepBroken),
+				WithExtractorKeepOldFiles(e.options.keepOldFiles),
+				WithExtractorKeepNewerFiles(e.options.keepNewerFiles),
+				WithExtractorNoTimes(e.options.noTimes),
+				WithExtractorStripComponents(e.options.stripComponents),
+				WithExtractorSparse(e.options.sparse),
+				WithExtractorSafeWrites(e.options.safeWrites),
+				WithExtractorUnlinkFirst(e.options.unlinkFirst),
+				WithExtractorNumericOwner(e.options.numericOwner),
+				WithExtractorIncremental(e.options.incremental),
+			}
+
+			innerExtractor, terr := NewExtractor(tempFile.Name(), e.chroot, innerOpts...)
+			if terr != nil {
+				return err
+			}
+			defer innerExtractor.Close()
+
+			return innerExtractor.Extract(ctx)
+		}
+	} else {
+		limiter := make(chan struct{}, e.options.concurrency)
+
+		wg, ctx := errgroup.WithContext(ctx)
+		defer func() {
+			if werr := wg.Wait(); werr != nil {
+				err = werr
+			}
+		}()
+
+		for i, file := range e.zr.File {
+			name := file.Name
+			if e.options.stripComponents > 0 {
+				stripped, ok := stripComponents(name, e.options.stripComponents)
+				if !ok {
+					continue // Skip file with fewer or equal components
+				}
+				name = stripped
+			}
+
+			path, err := filepath.Abs(filepath.Join(e.chroot, name))
+			if err != nil {
+				return err
+			}
+
+			if !strings.HasPrefix(path, e.chroot+string(filepath.Separator)) && path != e.chroot {
+				return fmt.Errorf("%s cannot be extracted outside of chroot (%s)", path, e.chroot)
+			}
+
+			if err := e.linksToDirs(path); err != nil {
+				return err
+			}
+
+			if err := os.MkdirAll(filepath.Dir(path), 0777); err != nil {
+				return err
+			}
+
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+
+			// Overwrite control policies
+			if file.Mode()&os.ModeDir == 0 && file.Mode()&os.ModeSymlink == 0 && file.Linkname == "" {
+				if e.options.unlinkFirst {
+					os.Remove(path) // Unconditionally remove before extraction
+				}
+				if e.options.keepOldFiles {
+					if _, err := os.Stat(path); err == nil {
+						continue // Skip extracting, file already exists
+					}
+				}
+				if e.options.keepNewerFiles {
+					if fi, err := os.Stat(path); err == nil {
+						if fi.ModTime().After(file.Modified) {
+							continue // Skip extracting, disk file is newer
+						}
+					}
+				}
+			}
+
+			switch {
+			case file.Mode()&os.ModeSymlink != 0 || file.Linkname != "":
+				continue
+
+			case file.Mode().IsDir():
+				err = e.createDirectory(path, file)
+
+			case file.Mode()&irregularModes != 0:
+				limiter <- struct{}{}
+				gf := e.zr.File[i]
+				p := path
+				wg.Go(func() error {
+					defer func() { <-limiter }()
+					err := extractSpecialFile(p, &gf.FileHeader)
+					if err == nil {
+						err = e.updateFileMetadata(p, gf)
+					}
+					return err
+				})
+
+			default:
+				limiter <- struct{}{}
+				gf := e.zr.File[i]
+				p := path
+				wg.Go(func() error {
+					defer func() { <-limiter }()
+					err := e.createFile(ctx, p, gf)
+					if err == nil {
+						err = e.updateFileMetadata(p, gf)
+					}
+					return err
+				})
+			}
+			if err != nil {
+				return err
+			}
+		}
+
+		if err := wg.Wait(); err != nil {
 			return err
 		}
 
-		innerOpts := []ExtractorOption{
-			WithExtractorConcurrency(e.options.concurrency),
-			WithExtractorChownErrorHandler(e.options.chownErrorHandler),
-			WithExtractorMaxFileSize(e.options.maxFileSize),
-			WithExtractorMaxRatio(e.options.maxDecompressionRatio),
-			WithExtractorXattrs(e.options.xattrs),
-			WithExtractorKeepBroken(e.options.keepBroken),
-			WithExtractorKeepOldFiles(e.options.keepOldFiles),
-			WithExtractorKeepNewerFiles(e.options.keepNewerFiles),
-			WithExtractorNoTimes(e.options.noTimes),
-			WithExtractorStripComponents(e.options.stripComponents),
-			WithExtractorSparse(e.options.sparse),
-			WithExtractorSafeWrites(e.options.safeWrites),
-			WithExtractorUnlinkFirst(e.options.unlinkFirst),
-			WithExtractorNumericOwner(e.options.numericOwner),
-			WithExtractorIncremental(e.options.incremental),
+		for _, file := range e.zr.File {
+			if file.Mode()&os.ModeSymlink == 0 && file.Linkname == "" {
+				continue
+			}
+			path, err := filepath.Abs(filepath.Join(e.chroot, file.Name))
+			if err != nil {
+				return err
+			}
+			if err := e.createLink(path, file); err != nil {
+				return err
+			}
 		}
 
-		innerExtractor, err := NewExtractor(tempFile.Name(), e.chroot, innerOpts...)
-		if err != nil {
-			return err
+		for _, file := range e.zr.File {
+			if !file.Mode().IsDir() {
+				continue
+			}
+			path, err := filepath.Abs(filepath.Join(e.chroot, file.Name))
+			if err != nil {
+				return err
+			}
+			err = e.updateFileMetadata(path, file)
+			if err != nil {
+				return err
+			}
 		}
-		defer innerExtractor.Close()
-
-		return innerExtractor.Extract(ctx)
 	}
 
-	limiter := make(chan struct{}, e.options.concurrency)
+	if e.options.incremental {
+		dumpdirPath := filepath.Join(e.chroot, ".zip_dumpdir")
+		if f, err := os.Open(dumpdirPath); err == nil {
+			defer f.Close()
+			scanner := bufio.NewScanner(f)
+			activeFiles := make(map[string]bool)
+			for scanner.Scan() {
+				line := strings.TrimSpace(scanner.Text())
+				if line != "" {
+					activeFiles[line] = true
+				}
+			}
+			activeFiles[".zip_dumpdir"] = true
 
-	wg, ctx := errgroup.WithContext(ctx)
-	defer func() {
-		if werr := wg.Wait(); werr != nil {
-			err = werr
+			filepath.Walk(e.chroot, func(path string, info os.FileInfo, err error) error {
+				if err != nil {
+					return err
+				}
+				if path == e.chroot {
+					return nil
+				}
+				rel, err := filepath.Rel(e.chroot, path)
+				if err != nil {
+					return err
+				}
+				relClean := filepath.ToSlash(rel)
+				if info.IsDir() {
+					relClean += "/"
+				}
+				if !activeFiles[relClean] {
+					os.RemoveAll(path)
+				}
+				return nil
+			})
 		}
-	}()
+	}
 
-	for i, file := range e.zr.File {
-		name := file.Name
+	return nil
+}
+
+func (e *Extractor) extractSolidStream(r io.Reader, ctx context.Context) error {
+	buf := make([]byte, 30)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, err := io.ReadFull(r, buf[:4]); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				break
+			}
+			return err
+		}
+		sig := binary.LittleEndian.Uint32(buf[:4])
+		if sig != fileHeaderSignature {
+			break // Reached Central Directory
+		}
+
+		if _, err := io.ReadFull(r, buf[4:30]); err != nil {
+			return err
+		}
+
+		flags := binary.LittleEndian.Uint16(buf[6:8])
+		method := binary.LittleEndian.Uint16(buf[8:10])
+		modTime := binary.LittleEndian.Uint16(buf[10:12])
+		modDate := binary.LittleEndian.Uint16(buf[12:14])
+		crc32Val := binary.LittleEndian.Uint32(buf[14:18])
+		compSize := binary.LittleEndian.Uint32(buf[18:22])
+		uncompSize := binary.LittleEndian.Uint32(buf[22:26])
+		filenameLen := binary.LittleEndian.Uint16(buf[26:28])
+		extraLen := binary.LittleEndian.Uint16(buf[28:30])
+
+		filenameBuf := make([]byte, filenameLen)
+		if _, err := io.ReadFull(r, filenameBuf); err != nil {
+			return err
+		}
+		extraBuf := make([]byte, extraLen)
+		if _, err := io.ReadFull(r, extraBuf); err != nil {
+			return err
+		}
+
+		name := string(filenameBuf)
+		if method != Store || (uncompSize == 0 && flags&0x8 != 0) {
+			return fmt.Errorf("zip: sequential extraction not supported for method %d with flags %x", method, flags)
+		}
+
 		if e.options.stripComponents > 0 {
 			stripped, ok := stripComponents(name, e.options.stripComponents)
 			if !ok {
-				continue // Skip file with fewer or equal components
+				if err := skipBytes(r, int64(uncompSize), flags); err != nil {
+					return err
+				}
+				continue
 			}
 			name = stripped
 		}
@@ -367,148 +583,124 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 			return err
 		}
 
-		if err := os.MkdirAll(filepath.Dir(path), 0777); err != nil {
-			return err
+		fh := &FileHeader{
+			Name:               name,
+			Method:             method,
+			Flags:              flags,
+			CRC32:              crc32Val,
+			CompressedSize64:   uint64(compSize),
+			UncompressedSize64: uint64(uncompSize),
+			Extra:              extraBuf,
 		}
+		fh.Modified = msDosTimeToTime(modDate, modTime)
 
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		// Overwrite control policies
-		if file.Mode()&os.ModeDir == 0 && file.Mode()&os.ModeSymlink == 0 && file.Linkname == "" {
-			if e.options.unlinkFirst {
-				os.Remove(path) // Unconditionally remove before extraction
-			}
-			if e.options.keepOldFiles {
-				if _, err := os.Stat(path); err == nil {
-					continue // Skip extracting, file already exists
-				}
-			}
-			if e.options.keepNewerFiles {
-				if fi, err := os.Stat(path); err == nil {
-					if fi.ModTime().After(file.Modified) {
-						continue // Skip extracting, disk file is newer
-					}
-				}
-			}
-		}
-
-		switch {
-		case file.Mode()&os.ModeSymlink != 0 || file.Linkname != "":
-			continue
-
-		case file.Mode().IsDir():
-			err = e.createDirectory(path, file)
-
-		case file.Mode()&irregularModes != 0:
-			limiter <- struct{}{}
-			gf := e.zr.File[i]
-			p := path
-			wg.Go(func() error {
-				defer func() { <-limiter }()
-				err := extractSpecialFile(p, &gf.FileHeader)
-				if err == nil {
-					err = e.updateFileMetadata(p, gf)
-				}
-				return err
-			})
-
-		default:
-			limiter <- struct{}{}
-			gf := e.zr.File[i]
-			p := path
-			wg.Go(func() error {
-				defer func() { <-limiter }()
-				err := e.createFile(ctx, p, gf)
-				if err == nil {
-					err = e.updateFileMetadata(p, gf)
-				}
-				return err
-			})
-		}
-		if err != nil {
-			return err
-		}
-	}
-
-	if err := wg.Wait(); err != nil {
-		return err
-	}
-
-	for _, file := range e.zr.File {
-		if file.Mode()&os.ModeSymlink == 0 && file.Linkname == "" {
-			continue
-		}
-		path, err := filepath.Abs(filepath.Join(e.chroot, file.Name))
-		if err != nil {
-			return err
-		}
-		if err := e.createLink(path, file); err != nil {
-			return err
-		}
-	}
-
-	for _, file := range e.zr.File {
-		if !file.Mode().IsDir() {
-			continue
-		}
-		path, err := filepath.Abs(filepath.Join(e.chroot, file.Name))
-		if err != nil {
-			return err
-		}
-		err = e.updateFileMetadata(path, file)
-		if err != nil {
-			return err
-		}
-	}
-
-	if e.options.incremental {
-		var dumpdirFile *File
-		for _, file := range e.zr.File {
-			if file.Name == ".zip_dumpdir" {
-				dumpdirFile = file
+		for extra := readBuf(extraBuf); len(extra) >= 4; {
+			fieldTag := extra.uint16()
+			fieldSize := int(extra.uint16())
+			if len(extra) < fieldSize {
 				break
 			}
-		}
-		if dumpdirFile != nil {
-			r, err := dumpdirFile.Open()
-			if err == nil {
-				defer r.Close()
-				scanner := bufio.NewScanner(r)
-				activeFiles := make(map[string]bool)
-				for scanner.Scan() {
-					line := strings.TrimSpace(scanner.Text())
-					if line != "" {
-						activeFiles[line] = true
-					}
+			fieldBuf := extra.sub(fieldSize)
+			switch fieldTag {
+			case infoZipNewUnixExtraID:
+				if uid, gid, ok := parseUnixExtra(extraBuf); ok {
+					fh.Uid = uid
+					fh.Gid = gid
+					fh.OwnerSet = true
 				}
-				activeFiles[".zip_dumpdir"] = true
-
-				filepath.Walk(e.chroot, func(path string, info os.FileInfo, err error) error {
-					if err != nil {
-						return err
+			case unixOwnerNameExtraID:
+				if uname, gname, ok := parseUnixOwnerNamesExtra(extraBuf); ok {
+					fh.Uname = uname
+					fh.Gname = gname
+				}
+			case ntfsAclExtraID:
+				fh.Acl = parseNtfsAcl(extraBuf)
+			case xattrExtraID:
+				if fh.Xattrs == nil {
+					fh.Xattrs = make(map[string]string)
+				}
+				for len(fieldBuf) >= 4 {
+					klen := int(fieldBuf.uint16())
+					if len(fieldBuf) < klen+2 {
+						break
 					}
-					if path == e.chroot {
-						return nil
+					k := string(fieldBuf.sub(klen))
+					vlen := int(fieldBuf.uint16())
+					if len(fieldBuf) < vlen {
+						break
 					}
-					rel, err := filepath.Rel(e.chroot, path)
-					if err != nil {
-						return err
-					}
-					relClean := filepath.ToSlash(rel)
-					if info.IsDir() {
-						relClean += "/"
-					}
-					if !activeFiles[relClean] {
-						os.RemoveAll(path)
-					}
-					return nil
-				})
+					v := string(fieldBuf.sub(vlen))
+					fh.Xattrs[k] = v
+				}
 			}
 		}
-	}
 
+		isDir := len(name) > 0 && name[len(name)-1] == '/'
+		if isDir {
+			fh.SetMode(fs.ModeDir | 0755)
+		} else {
+			fh.SetMode(0644)
+		}
+
+		if isDir {
+			os.MkdirAll(path, 0755)
+			e.updateFileMetadata(path, &File{FileHeader: *fh})
+		} else {
+			if e.options.unlinkFirst {
+				os.Remove(path)
+			}
+			os.MkdirAll(filepath.Dir(path), 0755)
+
+			writePath := path
+			if e.options.safeWrites {
+				writePath = path + ".tmp"
+			}
+
+			f, err := os.OpenFile(writePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+			if err != nil {
+				return err
+			}
+
+			var limitR io.Reader = io.LimitReader(r, int64(uncompSize))
+			_, err = io.Copy(f, limitR)
+			f.Close()
+			if err != nil {
+				os.Remove(writePath)
+				return err
+			}
+
+			if flags&0x8 != 0 {
+				var desc [16]byte
+				if _, err := io.ReadFull(r, desc[:]); err != nil {
+					return err
+				}
+			}
+
+			if e.options.safeWrites {
+				if rerr := os.Rename(writePath, path); rerr != nil {
+					os.Remove(writePath)
+					return rerr
+				}
+			}
+
+			e.updateFileMetadata(path, &File{FileHeader: *fh})
+			atomic.AddInt64(&e.written, int64(uncompSize))
+		}
+		atomic.AddInt64(&e.entries, 1)
+	}
+	return nil
+}
+
+func skipBytes(r io.Reader, n int64, flags uint16) error {
+	if _, err := io.CopyN(io.Discard, r, n); err != nil {
+		return err
+	}
+	if flags&0x8 != 0 {
+		var desc [16]byte
+		if _, err := io.ReadFull(r, desc[:]); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

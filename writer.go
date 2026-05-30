@@ -29,6 +29,7 @@ type Writer struct {
 	testHookCloseSizeOffset func(size, offset uint64)
 	encryptCD   bool
 	password    string
+	forceNoDescriptor bool
 }
 
 type header struct {
@@ -307,7 +308,14 @@ func (w *Writer) CreateHeader(fh *FileHeader) (io.Writer, error) {
 
 		ow = dirWriter{}
 	} else {
-		fh.Flags |= 0x8
+		if w.forceNoDescriptor {
+			fh.Flags &^= 0x8
+			fh.CompressedSize = uint32(min(fh.UncompressedSize64, uint32max))
+			fh.UncompressedSize = uint32(min(fh.UncompressedSize64, uint32max))
+			fh.CompressedSize64 = fh.UncompressedSize64
+		} else {
+			fh.Flags |= 0x8
+		}
 
 		fw = &fileWriter{
 			zipw:      w.cw,
@@ -371,15 +379,20 @@ func writeHeader(w io.Writer, h *header) error {
 
 	// In streaming mode or when forced by flags, always use Data Descriptor.
 	// This ensures we never need to Seek back to the Local Header.
-	if h.raw && !h.hasDataDescriptor() {
+	if h.raw || !h.hasDataDescriptor() {
 		b.uint32(h.CRC32)
 		b.uint32(uint32(min(h.CompressedSize64, uint32max)))
 		b.uint32(uint32(min(h.UncompressedSize64, uint32max)))
 	} else {
-		// Zero out sizes in header, they will be provided in the footer (Data Descriptor)
-		b.uint32(0)
-		b.uint32(0)
-		b.uint32(0)
+		if h.Method == Store && h.UncompressedSize64 > 0 {
+			b.uint32(0)
+			b.uint32(uint32(min(h.CompressedSize64, uint32max)))
+			b.uint32(uint32(min(h.UncompressedSize64, uint32max)))
+		} else {
+			b.uint32(0)
+			b.uint32(0)
+			b.uint32(0)
+		}
 		h.Flags |= 0x8
 	}
 	b.uint16(uint16(len(h.Name)))
