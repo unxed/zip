@@ -2,6 +2,7 @@ package zip
 
 import (
 	"bufio"
+    "bytes"
 	"context"
 	"fmt"
 	"io"
@@ -31,6 +32,135 @@ type extractorOptions struct {
 	maxDecompressionRatio int64
 	xattrs                bool
 	keepBroken            bool
+	keepOldFiles          bool
+	keepNewerFiles        bool
+	noTimes               bool
+	stripComponents       int
+	sparse                bool
+	safeWrites            bool
+	unlinkFirst           bool
+}
+
+// WithExtractorSafeWrites extracts files atomically by writing to a temporary file and renaming (--safe-writes).
+func WithExtractorSafeWrites(b bool) ExtractorOption {
+	return func(o *extractorOptions) error {
+		o.safeWrites = b
+		return nil
+	}
+}
+
+// WithExtractorUnlinkFirst removes existing files prior to extracting over them (-U, --unlink-first).
+func WithExtractorUnlinkFirst(b bool) ExtractorOption {
+	return func(o *extractorOptions) error {
+		o.unlinkFirst = b
+		return nil
+	}
+}
+
+// WithExtractorKeepOldFiles prevents overwriting existing files (-k or --keep-old-files)
+func WithExtractorKeepOldFiles(keep bool) ExtractorOption {
+	return func(o *extractorOptions) error {
+		o.keepOldFiles = keep
+		return nil
+	}
+}
+
+// WithExtractorKeepNewerFiles prevents overwriting files that are newer on disk (--keep-newer-files)
+func WithExtractorKeepNewerFiles(keep bool) ExtractorOption {
+	return func(o *extractorOptions) error {
+		o.keepNewerFiles = keep
+		return nil
+	}
+}
+
+// WithExtractorNoTimes prevents restoring original modification times (-m / --touch)
+func WithExtractorNoTimes(noTimes bool) ExtractorOption {
+	return func(o *extractorOptions) error {
+		o.noTimes = noTimes
+		return nil
+	}
+}
+
+// WithExtractorStripComponents strips the specified number of leading components from file names on extraction (--strip-components)
+func WithExtractorStripComponents(count int) ExtractorOption {
+	return func(o *extractorOptions) error {
+		o.stripComponents = count
+		return nil
+	}
+}
+
+func stripComponents(name string, count int) (string, bool) {
+	cleaned := filepath.ToSlash(filepath.Clean(name))
+	cleaned = strings.TrimPrefix(cleaned, "/")
+	if cleaned == "." || cleaned == "" {
+		return "", false
+	}
+	parts := strings.Split(cleaned, "/")
+	if len(parts) <= count {
+		return "", false
+	}
+	return strings.Join(parts[count:], "/"), true
+}
+
+// WithExtractorSparse enables extracting files as sparse files by seeking over zero-blocks (-S, --sparse).
+func WithExtractorSparse(b bool) ExtractorOption {
+	return func(o *extractorOptions) error {
+		o.sparse = b
+		return nil
+	}
+}
+
+var sparseBufPool = sync.Pool{
+	New: func() any {
+		return make([]byte, 32*1024)
+	},
+}
+
+func isAllZeros(p []byte) bool {
+	if len(p) == 0 {
+		return true
+	}
+	if p[0] != 0 {
+		return false
+	}
+	// Highly optimized SIMD-comparison via standard Go runtime bytealg
+	return len(p) == 1 || p[0] == p[1] && bytes.Equal(p[:len(p)-1], p[1:])
+}
+
+func copySparseZip(dst *os.File, src io.Reader, size uint64, written *int64, ctx context.Context) error {
+	bufInterface := sparseBufPool.Get()
+	defer sparseBufPool.Put(bufInterface)
+	buf := bufInterface.([]byte)
+
+	var total int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		n, err := src.Read(buf)
+		if n > 0 {
+			if isAllZeros(buf[:n]) {
+				_, seekErr := dst.Seek(int64(n), io.SeekCurrent)
+				if seekErr != nil {
+					return seekErr
+				}
+			} else {
+				_, wErr := dst.Write(buf[:n])
+				if wErr != nil {
+					return wErr
+				}
+			}
+			total += int64(n)
+			atomic.AddInt64(written, int64(n))
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return dst.Truncate(int64(size))
 }
 
 // WithExtractorXattrs enables restoration of extended attributes (xattrs, POSIX ACLs, SELinux).
@@ -152,7 +282,16 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 	}()
 
 	for i, file := range e.zr.File {
-		path, err := filepath.Abs(filepath.Join(e.chroot, file.Name))
+		name := file.Name
+		if e.options.stripComponents > 0 {
+			stripped, ok := stripComponents(name, e.options.stripComponents)
+			if !ok {
+				continue // Skip file with fewer or equal components
+			}
+			name = stripped
+		}
+
+		path, err := filepath.Abs(filepath.Join(e.chroot, name))
 		if err != nil {
 			return err
 		}
@@ -171,6 +310,25 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+
+		// Overwrite control policies
+		if file.Mode()&os.ModeDir == 0 && file.Mode()&os.ModeSymlink == 0 && file.Linkname == "" {
+			if e.options.unlinkFirst {
+				os.Remove(path) // Unconditionally remove before extraction
+			}
+			if e.options.keepOldFiles {
+				if _, err := os.Stat(path); err == nil {
+					continue // Skip extracting, file already exists
+				}
+			}
+			if e.options.keepNewerFiles {
+				if fi, err := os.Stat(path); err == nil {
+					if fi.ModTime().After(file.Modified) {
+						continue // Skip extracting, disk file is newer
+					}
+				}
+			}
 		}
 
 		switch {
@@ -309,7 +467,12 @@ func (e *Extractor) createFile(ctx context.Context, path string, file *File) (er
 	}
 	defer dclose(r, &err)
 
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
+	writePath := path
+	if e.options.safeWrites {
+		writePath = path + ".tmp"
+	}
+
+	f, err := os.OpenFile(writePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
 	if err != nil {
 		return err
 	}
@@ -318,7 +481,7 @@ func (e *Extractor) createFile(ctx context.Context, path string, file *File) (er
 	defer func() {
 		dclose(f, &err)
 		if err != nil && cleanup && !e.options.keepBroken {
-			os.Remove(path)
+			os.Remove(writePath)
 		}
 	}()
 
@@ -341,19 +504,24 @@ func (e *Extractor) createFile(ctx context.Context, path string, file *File) (er
 		return err
 	}
 
-	bw := bufioWriterPool.Get().(*bufio.Writer)
-	defer bufioWriterPool.Put(bw)
-
-	// Use LimitedReader to physically restrict reading (protection against spoofed headers)
 	var lr io.Reader = r
 	if e.options.maxFileSize > 0 {
 		lr = &io.LimitedReader{R: r, N: e.options.maxFileSize}
 	}
 
-	bw.Reset(ctxCountWriter{f, &e.written, ctx})
-	_, err = bw.ReadFrom(lr)
-	if err != nil {
-		return err
+	if e.options.sparse {
+		err = copySparseZip(f, lr, file.UncompressedSize64, &e.written, ctx)
+	} else {
+		bw := bufioWriterPool.Get().(*bufio.Writer)
+		defer bufioWriterPool.Put(bw)
+
+		bw.Reset(ctxCountWriter{f, &e.written, ctx})
+		_, err = bw.ReadFrom(lr)
+		if err != nil {
+			return err
+		}
+
+		err = bw.Flush()
 	}
 
 	// If we read everything allowed by the limit, but data still remains in the source reader - it's a bomb
@@ -364,22 +532,30 @@ func (e *Extractor) createFile(ctx context.Context, path string, file *File) (er
 		}
 	}
 
-	err = bw.Flush()
 	if err == nil {
 		cleanup = false
 	}
 	incOnSuccess(&e.entries, err)
 
+	if err == nil && e.options.safeWrites {
+		if rerr := os.Rename(writePath, path); rerr != nil {
+			os.Remove(writePath)
+			return rerr
+		}
+	}
+
 	return err
 }
 
 func (e *Extractor) updateFileMetadata(path string, file *File) error {
-	atime := time.Now()
-	if !file.Accessed.IsZero() {
-		atime = file.Accessed
-	}
-	if err := lchtimes(path, file.Mode(), atime, file.Modified); err != nil {
-		return err
+	if !e.options.noTimes {
+		atime := time.Now()
+		if !file.Accessed.IsZero() {
+			atime = file.Accessed
+		}
+		if err := lchtimes(path, file.Mode(), atime, file.Modified); err != nil {
+			return err
+		}
 	}
 
 	if err := lchmod(path, file.Mode()); err != nil {

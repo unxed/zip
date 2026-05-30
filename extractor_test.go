@@ -2,6 +2,7 @@ package zip
 
 import (
 	"context"
+    "time"
 	"os"
 	"runtime"
 	"strings"
@@ -338,6 +339,184 @@ func TestExtractor_KeepBroken(t *testing.T) {
 	}
 	if _, serr := os.Stat(filepath.Join(dstDir, "file.txt")); serr != nil {
 		t.Error("expected corrupted file to be preserved when KeepBroken is enabled")
+	}
+}
+func TestExtractor_KeepOldFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "keepold.zip")
+	dstDir := filepath.Join(tmpDir, "dst")
+	os.MkdirAll(dstDir, 0755)
+
+	targetPath := filepath.Join(dstDir, "test.txt")
+	os.WriteFile(targetPath, []byte("ORIGINAL"), 0644)
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	w, _ := zw.Create("test.txt")
+	w.Write([]byte("NEW"))
+	zw.Close()
+	f.Close()
+
+	ignoreChown := WithExtractorChownErrorHandler(func(name string, err error) error { return nil })
+	e, err := NewExtractor(zipPath, dstDir, WithExtractorKeepOldFiles(true), ignoreChown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+
+	if err := e.Extract(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(targetPath)
+	if string(data) != "ORIGINAL" {
+		t.Errorf("Expected ORIGINAL, got %s", string(data))
+	}
+}
+
+func TestExtractor_KeepNewerFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "keepnewer.zip")
+	dstDir := filepath.Join(tmpDir, "dst")
+	os.MkdirAll(dstDir, 0755)
+
+	targetPath := filepath.Join(dstDir, "test.txt")
+	os.WriteFile(targetPath, []byte("NEWER_DISK"), 0644)
+
+	newerTime := time.Now().Add(1 * time.Hour)
+	os.Chtimes(targetPath, newerTime, newerTime)
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	fh := &FileHeader{Name: "test.txt", Method: Store}
+	fh.SetModTime(time.Now().Add(-1 * time.Hour))
+	w, _ := zw.CreateHeader(fh)
+	w.Write([]byte("ARCHIVE"))
+	zw.Close()
+	f.Close()
+
+	ignoreChown := WithExtractorChownErrorHandler(func(name string, err error) error { return nil })
+	e, err := NewExtractor(zipPath, dstDir, WithExtractorKeepNewerFiles(true), ignoreChown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+
+	if err := e.Extract(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(targetPath)
+	if string(data) != "NEWER_DISK" {
+		t.Errorf("Expected NEWER_DISK, got %s", string(data))
+	}
+}
+
+func TestExtractor_NoTimes(t *testing.T) {
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "notimes.zip")
+	dstDir := filepath.Join(tmpDir, "dst")
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	oldTime := time.Date(1999, time.January, 1, 0, 0, 0, 0, time.UTC)
+	fh := &FileHeader{Name: "oldfile.txt"}
+	fh.SetModTime(oldTime)
+	w, _ := zw.CreateHeader(fh)
+	w.Write([]byte("data"))
+	zw.Close()
+	f.Close()
+
+	ignoreChown := WithExtractorChownErrorHandler(func(name string, err error) error { return nil })
+	e, err := NewExtractor(zipPath, dstDir, WithExtractorNoTimes(true), ignoreChown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+
+	if err := e.Extract(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	fi, err := os.Stat(filepath.Join(dstDir, "oldfile.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if fi.ModTime().Equal(oldTime) {
+		t.Errorf("Modification time was restored despite WithExtractorNoTimes(true)")
+	}
+}
+
+func TestExtractor_StripComponents(t *testing.T) {
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "strip.zip")
+	dstDir := filepath.Join(tmpDir, "dst")
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	w, _ := zw.Create("level1/level2/target.txt")
+	w.Write([]byte("data"))
+	w, _ = zw.Create("short.txt")
+	w.Write([]byte("data"))
+	zw.Close()
+	f.Close()
+
+	ignoreChown := WithExtractorChownErrorHandler(func(name string, err error) error { return nil })
+	e, err := NewExtractor(zipPath, dstDir, WithExtractorStripComponents(1), ignoreChown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+
+	if err := e.Extract(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dstDir, "level2", "target.txt")); err != nil {
+		t.Errorf("Expected stripped nested file not found: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dstDir, "short.txt")); !os.IsNotExist(err) {
+		t.Errorf("Expected short.txt to be skipped, but it was extracted")
+	}
+}
+
+func TestExtractor_SparseExtraction(t *testing.T) {
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "sparse.zip")
+	dstDir := filepath.Join(tmpDir, "dst")
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+
+	zeroSize := int64(1024 * 1024)
+	fh := &FileHeader{Name: "zeros.txt", Method: Store}
+	fh.UncompressedSize64 = uint64(zeroSize)
+	w, _ := zw.CreateHeader(fh)
+	w.Write(make([]byte, zeroSize))
+	zw.Close()
+	f.Close()
+
+	ignoreChown := WithExtractorChownErrorHandler(func(name string, err error) error { return nil })
+	e, err := NewExtractor(zipPath, dstDir, WithExtractorSparse(true), ignoreChown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+
+	if err := e.Extract(context.Background()); err != nil {
+		t.Fatalf("Extraction failed: %v", err)
+	}
+
+	targetFile := filepath.Join(dstDir, "zeros.txt")
+	fi, err := os.Stat(targetFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if fi.Size() != zeroSize {
+		t.Errorf("Logical size mismatch: expected %d, got %d", zeroSize, fi.Size())
 	}
 }
 
