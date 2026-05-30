@@ -348,7 +348,7 @@ func (e *Extractor) updateFileMetadata(path string, file *File) error {
 
 	// Apply Windows ACL if present
 	if len(file.Acl) > 0 {
-		applyNtfsAcl(path, file.Acl)
+		applyNtfsAclFunc(path, file.Acl)
 	}
 
 	if e.options.xattrs {

@@ -62,6 +62,12 @@ const (
 	ntfsAclExtraID        = 0x4453 // Windows NT Security Descriptor (ACL)
 	xattrExtraID          = 0x7878 // Xattrs
 )
+// Abstraction hooks for NTFS security and stream operations to support unit testing on non-Windows platforms.
+var (
+	getFileSecurityFunc           = getFileSecurity
+	applyNtfsAclFunc              = applyNtfsAcl
+	getAlternativeDataStreamsFunc = getAlternativeDataStreams
+)
 const (
 	// Strong Encryption (SES) Algorithm IDs
 	sesDES    = 0x6601

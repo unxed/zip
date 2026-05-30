@@ -47,6 +47,12 @@ func lchown(name string, uid, gid int) error {
 func applyNtfsAcl(path string, acl []byte) error {
 	return nil // No-op on Unix
 }
+func getFileSecurity(path string) ([]byte, error) {
+	return nil, nil
+}
+func getAlternativeDataStreams(path string) ([]string, error) {
+	return nil, nil
+}
 
 func appendPlatformExtra(fi os.FileInfo, hdr *FileHeader, force bool) {
 	if !force {

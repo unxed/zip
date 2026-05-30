@@ -12,5 +12,16 @@ func rememberHardLink(fi os.FileInfo, relPath string, seen map[hardlinkKey]strin
 
 func sysPlatformExtra(fi os.FileInfo, hdr *FileHeader) {}
 func extractSpecialFile(path string, hdr *FileHeader) error { return nil }
-func sysXattrs(path string, hdr *FileHeader) error { return nil }
-func applyXattrs(path string, hdr *FileHeader) error { return nil }
+func sysXattrs(path string, hdr *FileHeader) error {
+	acl, err := getFileSecurityFunc(path)
+	if err == nil && len(acl) > 0 {
+		hdr.Acl = acl
+	}
+	return nil
+}
+func applyXattrs(path string, hdr *FileHeader) error {
+	if len(hdr.Acl) > 0 {
+		applyNtfsAclFunc(path, hdr.Acl)
+	}
+	return nil
+}

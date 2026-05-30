@@ -143,6 +143,33 @@ func (a *Archiver) Written() (bytes, entries int64) {
 }
 
 func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (err error) {
+	if a.options.xattrs {
+		type virtualFile struct {
+			path string
+			info os.FileInfo
+		}
+		var virtualFiles []virtualFile
+
+		for name, fi := range files {
+			if fi != nil && fi.Mode().IsRegular() {
+				streams, _ := getAlternativeDataStreamsFunc(name)
+				for _, stream := range streams {
+					streamPath := name + stream
+					if streamFi, serr := os.Stat(streamPath); serr == nil {
+						virtualFiles = append(virtualFiles, virtualFile{
+							path: streamPath,
+							info: streamFi,
+						})
+					}
+				}
+			}
+		}
+
+		for _, vf := range virtualFiles {
+			files[vf.path] = vf.info
+		}
+	}
+
 	names := make([]string, 0, len(files))
 	for name := range files {
 		names = append(names, name)
@@ -193,6 +220,12 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 
 		hdr := &hdrs[i]
 		a.fileInfoHeaderFast(rel, fi, hdr)
+
+		if a.options.xattrs {
+			if acl, err := getFileSecurityFunc(path); err == nil && len(acl) > 0 {
+				hdr.Acl = acl
+			}
+		}
 
 		if ctx.Err() != nil {
 			return ctx.Err()
