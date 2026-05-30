@@ -215,6 +215,7 @@ This library extends the standard ZIP format by proposing and supporting several
 *   **Unix Owner Names (`0x787a`)**: Stores string user (`Uname`) and group (`Gname`) owner names. This complements numeric UID/GID (`0x7875`), enabling user-name-based file ownership restoration on systems where numeric IDs differ.
 *   **NTFS Security Descriptors (`0x4453`)**: Preserves raw Windows Security Descriptors (NTFS ACLs) containing OWNER, GROUP, and DACL settings.
 *   **Solid ZIP-in-ZIP Packaging**: Bundles a nested uncompressed `Store` ZIP archive as a single compressed outer entry `solid.zip`. This achieves maximum solid compression ratios (similar to TAR) while keeping the outer archive fully readable by standard tools.
+*   **Incremental Sync Support**: Facilitates state synchronization by storing a `.zip_dumpdir` index file within archives. The extractor can use this index to remove files from the destination directory that are no longer present in the backup, effectively behaving like GNU tar's incremental restore.
 
 ## License
 
