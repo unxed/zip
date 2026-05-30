@@ -88,7 +88,6 @@ func TestNtfsAclAndAds_Windows(t *testing.T) {
 	}
 }
 func TestNtfsAclAndAds_Mocked(t *testing.T) {
-	// Сохраняем оригинальные функции для последующего восстановления
 	origGetFileSecurity := getFileSecurityFunc
 	origApplyNtfsAcl := applyNtfsAclFunc
 	origGetAlternativeDataStreams := getAlternativeDataStreamsFunc
@@ -102,7 +101,6 @@ func TestNtfsAclAndAds_Mocked(t *testing.T) {
 	mockAcl := []byte("mock-security-descriptor-data")
 	mockStreams := []string{":Zone.Identifier", ":custom_stream"}
 
-	// Настраиваем моки
 	getFileSecurityFunc = func(path string) ([]byte, error) {
 		return mockAcl, nil
 	}
@@ -117,12 +115,10 @@ func TestNtfsAclAndAds_Mocked(t *testing.T) {
 		return mockStreams, nil
 	}
 
-	// Проверяем логику работы архиватора с моками
 	tmp := t.TempDir()
 	filePath := filepath.Join(tmp, "test_file.txt")
 	os.WriteFile(filePath, []byte("some content"), 0644)
 
-	// Создаем виртуальные потоки на диске, чтобы os.Stat не падал при архивации
 	os.WriteFile(filePath+":Zone.Identifier", []byte("zone data"), 0644)
 	os.WriteFile(filePath+":custom_stream", []byte("custom data"), 0644)
 
@@ -132,7 +128,6 @@ func TestNtfsAclAndAds_Mocked(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Включаем xattrs для вызова sysXattrs и getAlternativeDataStreamsFunc
 	a, err := NewArchiver(f, tmp, WithArchiverXattrs(true))
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +143,6 @@ func TestNtfsAclAndAds_Mocked(t *testing.T) {
 	a.Close()
 	f.Close()
 
-	// Извлекаем и проверяем вызовы функций восстановления
 	dstDir := filepath.Join(tmp, "extracted")
 	e, err := NewExtractor(zipPath, dstDir, WithExtractorXattrs(true))
 	if err != nil {
@@ -161,7 +155,6 @@ func TestNtfsAclAndAds_Mocked(t *testing.T) {
 	}
 	e.Close()
 
-	// Проверяем, что восстановленный ACL совпадает с моком
 	if !bytes.Equal(appliedAcl, mockAcl) {
 		t.Errorf("expected applied ACL %q, got %q", string(mockAcl), string(appliedAcl))
 	}

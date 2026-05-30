@@ -533,7 +533,7 @@ func TestSolidAndIncremental_Zip(t *testing.T) {
 	os.WriteFile(filepath.Join(srcDir, "stay.txt"), []byte("stay data"), 0644)
 	os.WriteFile(filepath.Join(srcDir, "deleted.txt"), []byte("to be deleted"), 0644)
 
-	// 1. Упаковываем файлы в Solid ZIP с сохранением инкрементального индекса
+	// 1. Pack files into Solid ZIP with incremental index preservation
 	f, err := os.Create(zipPath)
 	if err != nil {
 		t.Fatal(err)
@@ -564,7 +564,7 @@ func TestSolidAndIncremental_Zip(t *testing.T) {
 	a.Close()
 	f.Close()
 
-	// 2. Распаковываем файлы в первый раз
+	// 2. Extract files for the first time
 	e, err := NewExtractor(zipPath, dstDir)
 	if err != nil {
 		t.Fatal(err)
@@ -581,7 +581,7 @@ func TestSolidAndIncremental_Zip(t *testing.T) {
 		t.Errorf("file 'deleted.txt' was not extracted")
 	}
 
-	// 3. Создаем новый инкрементальный архив, в котором файл 'deleted.txt' больше не присутствует
+	// 3. Create a new incremental archive where 'deleted.txt' is no longer present
 	os.Remove(filepath.Join(srcDir, "deleted.txt"))
 	os.Remove(zipPath)
 
@@ -606,7 +606,7 @@ func TestSolidAndIncremental_Zip(t *testing.T) {
 	a2.Close()
 	f2.Close()
 
-	// 4. Восстанавливаем архив поверх dstDir с флагом WithExtractorIncremental(true)
+	// 4. Restore archive over dstDir with WithExtractorIncremental(true) flag
 	e2, err := NewExtractor(zipPath, dstDir, WithExtractorIncremental(true))
 	if err != nil {
 		t.Fatal(err)
@@ -616,7 +616,7 @@ func TestSolidAndIncremental_Zip(t *testing.T) {
 	}
 	e2.Close()
 
-	// Файл 'stay.txt' должен остаться, а 'deleted.txt' — удален
+	// File 'stay.txt' should remain, while 'deleted.txt' should be deleted
 	if _, err := os.Stat(filepath.Join(dstDir, "stay.txt")); err != nil {
 		t.Errorf("file 'stay.txt' should be kept")
 	}
@@ -624,7 +624,7 @@ func TestSolidAndIncremental_Zip(t *testing.T) {
 		t.Errorf("file 'deleted.txt' was not deleted during incremental restore")
 	}
 
-	// 5. Проверяем совместимость со стандартной утилитой unzip (если она доступна в системе)
+	// 5. Check compatibility with standard unzip utility (if available)
 	if unzipPath, err := exec.LookPath("unzip"); err == nil {
 
 		unzipDst := filepath.Join(tmpDir, "unzip_dst")
@@ -674,7 +674,7 @@ func TestSolidFallback_Zip(t *testing.T) {
 	}
 	w, _ := zw.CreateHeader(hdr)
 
-	// Создаем внутренний архиватор с forceNoDescriptor = false (имитируя стороннюю утилиту)
+	// Create internal archiver with forceNoDescriptor = false (simulating a third-party utility)
 	innerZw := NewWriter(w)
 
 	innerW, _ := innerZw.Create("test.txt")
@@ -684,8 +684,7 @@ func TestSolidFallback_Zip(t *testing.T) {
 	zw.Close()
 	f.Close()
 
-	// Извлекаем. Потоковая распаковка должна завершиться ошибкой,
-	// автоматически вызвав двухпроходный fallback-режим.
+	// Extract. Streaming extraction should fail, automatically triggering two-pass fallback mode.
 	e, err := NewExtractor(zipPath, dstDir)
 	if err != nil {
 		t.Fatal(err)
@@ -709,7 +708,7 @@ func TestExtractor_ConcurrencyIntegrity(t *testing.T) {
 	zipPath := filepath.Join(tmpDir, "stress.zip")
 	dstDir := filepath.Join(tmpDir, "dst")
 
-	// Создаем 100 файлов, каждый содержит свое имя как контент
+	// Create 100 files, each containing its name as content
 	f, _ := os.Create(zipPath)
 	zw := NewWriter(f)
 	for i := 0; i < 100; i++ {
@@ -720,14 +719,14 @@ func TestExtractor_ConcurrencyIntegrity(t *testing.T) {
 	zw.Close()
 	f.Close()
 
-	// Распаковываем с высокой параллельностью
+	// Extract with high concurrency
 	e, _ := NewExtractor(zipPath, dstDir, WithExtractorConcurrency(20))
 	if err := e.Extract(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	e.Close()
 
-	// Проверяем, что каждый файл содержит именно свое имя (не чужое из-за гонки)
+	// Check that each file contains exactly its name (not another one due to a race)
 	for i := 0; i < 100; i++ {
 		name := fmt.Sprintf("file_%d.txt", i)
 		data, _ := os.ReadFile(filepath.Join(dstDir, name))
@@ -753,7 +752,7 @@ func TestTolerantMode_Zip(t *testing.T) {
 	zw.Close()
 	f.Close()
 
-	// Портим данные файла bad.txt (находим их в середине архива)
+	// Corrupt bad.txt data (find it in the middle of the archive)
 	raw, _ := os.ReadFile(zipPath)
 	idx := bytes.Index(raw, []byte("I will be corrupted"))
 	for i := 0; i < 5; i++ {
@@ -761,7 +760,7 @@ func TestTolerantMode_Zip(t *testing.T) {
 	}
 	os.WriteFile(zipPath, raw, 0644)
 
-	// Распаковываем с TolerantMode(true)
+	// Extract with TolerantMode(true)
 	e, _ := NewExtractor(zipPath, dstDir, WithExtractorTolerant(true))
 	err := e.Extract(context.Background())
 	if err != nil {
@@ -769,7 +768,7 @@ func TestTolerantMode_Zip(t *testing.T) {
 	}
 	e.Close()
 
-	// Проверяем, что хорошие файлы на месте
+	// Check that good files are present
 	if _, err := os.Stat(filepath.Join(dstDir, "good1.txt")); err != nil {
 		t.Error("good1.txt missing")
 	}
@@ -818,7 +817,7 @@ func TestZipExternalCompatibility_Zip(t *testing.T) {
 	a.Close()
 	f.Close()
 
-	// 1. Проверяем совместимость с 7z (если установлен)
+	// 1. Check compatibility with 7z (if available)
 	if p7zPath, err := exec.LookPath("7z"); err == nil {
 		t.Logf("[DEBUG TEST] Found 7z utility at %s. Verifying backward compatibility...", p7zPath)
 		dstDir := filepath.Join(tmpDir, "7z_dst")
@@ -846,7 +845,7 @@ func TestZipExternalCompatibility_Zip(t *testing.T) {
 		t.Log("[DEBUG TEST] 7z compatibility verified successfully!")
 	}
 
-	// 2. Проверяем совместимость с unar (если установлен)
+	// 2. Check compatibility with unar (if available)
 	if unarPath, err := exec.LookPath("unar"); err == nil {
 		t.Logf("[DEBUG TEST] Found unar utility at %s. Verifying backward compatibility...", unarPath)
 		dstDir := filepath.Join(tmpDir, "unar_dst")

@@ -239,7 +239,7 @@ func TestWriter_CDE(t *testing.T) {
 	// 3. Open with the correct password
 	zr := new(Reader)
 	zr.SetPassword(password)
-	// Direct call to init, as NewReader does not take a password in the constructor immediately
+	// Direct init call, as NewReader does not take a password in the constructor immediately
 	err = zr.init(bytes.NewReader(raw), int64(len(raw)))
 	if err != nil {
 		t.Fatalf("failed to open CDE archive with password: %v", err)

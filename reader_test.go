@@ -341,7 +341,7 @@ func TestZip_ReadDirIncremental(t *testing.T) {
 		t.Fatal("Directory file does not implement fs.ReadDirFile")
 	}
 
-	// Считываем первые 2 элемента
+	// Read the first 2 entries
 	entries, err := rdf.ReadDir(2)
 	if err != nil {
 		t.Fatal(err)
@@ -350,7 +350,7 @@ func TestZip_ReadDirIncremental(t *testing.T) {
 		t.Errorf("Expected 2 entries, got %d", len(entries))
 	}
 
-	// Запрашиваем 3 элемента (но осталось всего 2)
+	// Request 3 entries (but only 2 remain)
 	entries2, err := rdf.ReadDir(3)
 	if err != nil {
 		t.Fatal(err)
@@ -359,7 +359,7 @@ func TestZip_ReadDirIncremental(t *testing.T) {
 		t.Errorf("Expected remaining 2 entries, got %d", len(entries2))
 	}
 
-	// Дальнейший запрос должен возвращать io.EOF
+	// Subsequent request should return io.EOF
 	_, err = rdf.ReadDir(1)
 	if err != io.EOF {
 		t.Errorf("Expected io.EOF, got %v", err)
@@ -370,7 +370,7 @@ func TestSalvageMode_Zip(t *testing.T) {
 	tmpDir := t.TempDir()
 	zipPath := filepath.Join(tmpDir, "broken.zip")
 
-	// 1. Создаем корректный ZIP с данными в локальных заголовках
+	// 1. Create a valid ZIP with data in local headers
 	f, _ := os.Create(zipPath)
 	zw := NewWriter(f)
 
@@ -389,14 +389,14 @@ func TestSalvageMode_Zip(t *testing.T) {
 	zw.Close()
 	f.Close()
 
-	// 2. Определяем смещение Central Directory (оно в конце)
-	// и обрезаем файл, полностью удаляя "оглавление".
+	// 2. Determine Central Directory offset (it is at the end)
+	// and truncate the file, completely removing the "table of contents".
 	content, _ := os.ReadFile(zipPath)
-	// Сигнатура EOCD: 0x06054b50. Просто отрежем последние 100 байт для гарантии.
+	// EOCD signature: 0x06054b50. Just cut off the last 100 bytes to be sure.
 	truncatedContent := content[:len(content)-100]
 	os.WriteFile(zipPath, truncatedContent, 0644)
 
-	// 3. NewReader должен упасть в Salvage Mode и всё равно найти файлы
+	// 3. NewReader should drop into Salvage Mode and still find the files
 	zr, err := OpenReader(zipPath)
 	if err != nil {
 		t.Fatalf("OpenReader failed to salvage ZIP: %v", err)
@@ -413,7 +413,6 @@ func TestSalvageMode_Zip(t *testing.T) {
 		t.Errorf("Salvage mode failed to recover all files: found1=%v, found2=%v", found1, found2)
 	}
 
-	// Проверяем читаемость данных
 	rc, err := zr.File[0].Open()
 	if err != nil {
 		t.Fatalf("Failed to open salvaged file: %v", err)
