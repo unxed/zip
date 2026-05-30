@@ -537,7 +537,13 @@ func TestSolidAndIncremental_Zip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a, err := NewArchiver(f, srcDir, WithArchiverSolid(true), WithArchiverIncremental(true), WithArchiverMethod(Deflate))
+	a, err := NewArchiver(f, srcDir,
+		WithArchiverSolid(true),
+		WithArchiverIncremental(true),
+		WithArchiverMethod(Deflate),
+		WithArchiverPlatformMetadata(true),
+		WithArchiverXattrs(true),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -578,7 +584,13 @@ func TestSolidAndIncremental_Zip(t *testing.T) {
 	os.Remove(zipPath)
 
 	f2, _ := os.Create(zipPath)
-	a2, _ := NewArchiver(f2, srcDir, WithArchiverSolid(true), WithArchiverIncremental(true), WithArchiverMethod(Deflate))
+	a2, _ := NewArchiver(f2, srcDir,
+		WithArchiverSolid(true),
+		WithArchiverIncremental(true),
+		WithArchiverMethod(Deflate),
+		WithArchiverPlatformMetadata(true),
+		WithArchiverXattrs(true),
+	)
 
 	filesMap2 := make(map[string]os.FileInfo)
 	filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
