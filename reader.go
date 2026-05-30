@@ -83,17 +83,60 @@ func NewReader(r io.ReaderAt, size int64) (*Reader, error) {
 		return nil, errors.New("zip: size cannot be negative")
 	}
 	zr := new(Reader)
-	var err error
-	if err = zr.init(r, size); err != nil && err != ErrInsecurePath {
+	err := zr.init(r, size)
+	if err != nil && err != ErrInsecurePath {
 		return nil, err
 	}
 	return zr, err
 }
 
+func (r *Reader) salvage(rdr io.ReaderAt, size int64) error {
+	buf := make([]byte, fileHeaderLen)
+	for off := int64(0); off < size-fileHeaderLen; {
+		if _, err := rdr.ReadAt(buf[:4], off); err != nil {
+			break
+		}
+		if binary.LittleEndian.Uint32(buf[:4]) == fileHeaderSignature {
+			if _, err := rdr.ReadAt(buf[4:], off+4); err != nil {
+				break
+			}
+			b := readBuf(buf[4:])
+			f := &File{zip: r, zipr: rdr, headerOffset: off}
+			f.ReaderVersion = b.uint16()
+			f.Flags = b.uint16()
+			f.Method = b.uint16()
+			f.ModifiedTime = b.uint16()
+			f.ModifiedDate = b.uint16()
+			f.CRC32 = b.uint32()
+			f.CompressedSize = b.uint32()
+			f.UncompressedSize = b.uint32()
+			f.CompressedSize64 = uint64(f.CompressedSize)
+			f.UncompressedSize64 = uint64(f.UncompressedSize)
+			nlen := int(b.uint16())
+			elen := int(b.uint16())
+
+			data := make([]byte, nlen+elen)
+			if _, err := rdr.ReadAt(data, off+fileHeaderLen); err == nil {
+				f.Name = string(data[:nlen])
+				f.Extra = data[nlen:]
+				r.File = append(r.File, f)
+				off += fileHeaderLen + int64(nlen) + int64(elen) + int64(f.CompressedSize64)
+				continue
+			}
+		}
+		off++
+	}
+	if len(r.File) == 0 {
+		return ErrFormat
+	}
+	return nil
+}
+
 func (r *Reader) init(rdr io.ReaderAt, size int64) error {
+	r.r = rdr
 	end, baseOffset, err := readDirectoryEnd(rdr, size)
 	if err != nil {
-		return err
+		return r.salvage(rdr, size)
 	}
 	r.r = rdr
 	r.baseOffset = baseOffset

@@ -43,6 +43,7 @@ type extractorOptions struct {
 	unlinkFirst           bool
 	numericOwner          bool
 	incremental           bool
+	tolerant              bool
 }
 
 // WithExtractorSafeWrites extracts files atomically by writing to a temporary file and renaming (--safe-writes).
@@ -210,6 +211,14 @@ func WithExtractorNumericOwner(b bool) ExtractorOption {
 func WithExtractorIncremental(b bool) ExtractorOption {
 	return func(o *extractorOptions) error {
 		o.incremental = b
+		return nil
+	}
+}
+
+// WithExtractorTolerant allows extraction to continue even if some files are corrupted.
+func WithExtractorTolerant(b bool) ExtractorOption {
+	return func(o *extractorOptions) error {
+		o.tolerant = b
 		return nil
 	}
 }
@@ -434,10 +443,14 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 					if err == nil {
 						err = e.updateFileMetadata(p, gf)
 					}
+					if err != nil && e.options.tolerant {
+						fmt.Printf("zip: skipping corrupted file %q: %v\n", gf.Name, err)
+						return nil // Suppress error to continue
+					}
 					return err
 				})
 			}
-			if err != nil {
+			if err != nil && !e.options.tolerant {
 				return err
 			}
 		}

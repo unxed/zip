@@ -1,6 +1,7 @@
 package zip
 
 import (
+    "bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -699,6 +700,47 @@ func TestSolidFallback_Zip(t *testing.T) {
 	}
 	if string(data) != "some fallback data" {
 		t.Errorf("expected 'some fallback data', got %q", string(data))
+	}
+}
+
+func TestTolerantMode_Zip(t *testing.T) {
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "corrupt.zip")
+	dstDir := filepath.Join(tmpDir, "dst")
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	w, _ := zw.Create("good1.txt")
+	w.Write([]byte("I am fine"))
+	w, _ = zw.Create("bad.txt")
+	w.Write([]byte("I will be corrupted"))
+	w, _ = zw.Create("good2.txt")
+	w.Write([]byte("I am also fine"))
+	zw.Close()
+	f.Close()
+
+	// Портим данные файла bad.txt (находим их в середине архива)
+	raw, _ := os.ReadFile(zipPath)
+	idx := bytes.Index(raw, []byte("I will be corrupted"))
+	for i := 0; i < 5; i++ {
+		raw[idx+i] = 0xFF
+	}
+	os.WriteFile(zipPath, raw, 0644)
+
+	// Распаковываем с TolerantMode(true)
+	e, _ := NewExtractor(zipPath, dstDir, WithExtractorTolerant(true))
+	err := e.Extract(context.Background())
+	if err != nil {
+		t.Errorf("Extract failed despite tolerant mode: %v", err)
+	}
+	e.Close()
+
+	// Проверяем, что хорошие файлы на месте
+	if _, err := os.Stat(filepath.Join(dstDir, "good1.txt")); err != nil {
+		t.Error("good1.txt missing")
+	}
+	if _, err := os.Stat(filepath.Join(dstDir, "good2.txt")); err != nil {
+		t.Error("good2.txt missing")
 	}
 }
 

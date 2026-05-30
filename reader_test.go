@@ -3,6 +3,7 @@ package zip
 import (
 	"bytes"
 	"encoding/binary"
+    "path/filepath"
 	"errors"
 	"io"
 	"io/fs"
@@ -362,5 +363,64 @@ func TestZip_ReadDirIncremental(t *testing.T) {
 	_, err = rdf.ReadDir(1)
 	if err != io.EOF {
 		t.Errorf("Expected io.EOF, got %v", err)
+	}
+}
+
+func TestSalvageMode_Zip(t *testing.T) {
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "broken.zip")
+
+	// 1. Создаем корректный ZIP с данными в локальных заголовках
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+
+	fh1 := &FileHeader{Name: "file1.txt", Method: Store}
+	fh1.UncompressedSize64 = 5
+	fh1.CompressedSize64 = 5
+	w1, _ := zw.CreateHeader(fh1)
+	w1.Write([]byte("data1"))
+
+	fh2 := &FileHeader{Name: "file2.txt", Method: Store}
+	fh2.UncompressedSize64 = 5
+	fh2.CompressedSize64 = 5
+	w2, _ := zw.CreateHeader(fh2)
+	w2.Write([]byte("data2"))
+
+	zw.Close()
+	f.Close()
+
+	// 2. Определяем смещение Central Directory (оно в конце)
+	// и обрезаем файл, полностью удаляя "оглавление".
+	content, _ := os.ReadFile(zipPath)
+	// Сигнатура EOCD: 0x06054b50. Просто отрежем последние 100 байт для гарантии.
+	truncatedContent := content[:len(content)-100]
+	os.WriteFile(zipPath, truncatedContent, 0644)
+
+	// 3. NewReader должен упасть в Salvage Mode и всё равно найти файлы
+	zr, err := OpenReader(zipPath)
+	if err != nil {
+		t.Fatalf("OpenReader failed to salvage ZIP: %v", err)
+	}
+	defer zr.Close()
+
+	found1, found2 := false, false
+	for _, file := range zr.File {
+		if file.Name == "file1.txt" { found1 = true }
+		if file.Name == "file2.txt" { found2 = true }
+	}
+
+	if !found1 || !found2 {
+		t.Errorf("Salvage mode failed to recover all files: found1=%v, found2=%v", found1, found2)
+	}
+
+	// Проверяем читаемость данных
+	rc, err := zr.File[0].Open()
+	if err != nil {
+		t.Fatalf("Failed to open salvaged file: %v", err)
+	}
+	defer rc.Close()
+	d, _ := io.ReadAll(rc)
+	if len(d) == 0 {
+		t.Error("Salvaged file content is empty")
 	}
 }
