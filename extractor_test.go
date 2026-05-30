@@ -702,6 +702,106 @@ func TestSolidFallback_Zip(t *testing.T) {
 	}
 }
 
+func TestZipExternalCompatibility_Zip(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "src")
+	os.MkdirAll(srcDir, 0755)
+
+	filePath := filepath.Join(srcDir, "test.txt")
+	os.WriteFile(filePath, []byte("solid metadata content"), 0644)
+
+	zipPath := filepath.Join(tmpDir, "meta_compat.zip")
+	f, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Pack with xattrs, platform metadata (Uname/Gname)
+	a, err := NewArchiver(f, tmpDir,
+		WithArchiverSolid(true),
+		WithArchiverIncremental(true),
+		WithArchiverMethod(Deflate),
+		WithArchiverPlatformMetadata(true),
+		WithArchiverXattrs(true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	filesMap := make(map[string]os.FileInfo)
+	filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
+		if path != srcDir {
+			filesMap[path] = info
+		}
+		return nil
+	})
+
+	if err := a.Archive(context.Background(), filesMap); err != nil {
+		t.Fatal(err)
+	}
+	a.Close()
+	f.Close()
+
+	// 1. Проверяем совместимость с 7z (если установлен)
+	if p7zPath, err := exec.LookPath("7z"); err == nil {
+		t.Logf("[DEBUG TEST] Found 7z utility at %s. Verifying backward compatibility...", p7zPath)
+		dstDir := filepath.Join(tmpDir, "7z_dst")
+		os.MkdirAll(dstDir, 0755)
+
+		cmd := exec.Command(p7zPath, "x", "-o"+dstDir, zipPath)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("7z extraction of outer ZIP failed: %v, output: %s", err, string(output))
+		}
+
+		innerZip := filepath.Join(dstDir, "solid.zip")
+		innerDst := filepath.Join(dstDir, "inner")
+		cmdInner := exec.Command(p7zPath, "x", "-o"+innerDst, innerZip)
+		if output, err := cmdInner.CombinedOutput(); err != nil {
+			t.Fatalf("7z extraction of inner ZIP failed: %v, output: %s", err, string(output))
+		}
+
+		data, err := os.ReadFile(filepath.Join(innerDst, "src", "test.txt"))
+		if err != nil {
+			t.Fatalf("Failed to read file extracted by 7z: %v", err)
+		}
+		if string(data) != "solid metadata content" {
+			t.Errorf("Content mismatch in file extracted by 7z: expected 'solid metadata content', got %q", string(data))
+		}
+		t.Log("[DEBUG TEST] 7z compatibility verified successfully!")
+	}
+
+	// 2. Проверяем совместимость с unar (если установлен)
+	if unarPath, err := exec.LookPath("unar"); err == nil {
+		t.Logf("[DEBUG TEST] Found unar utility at %s. Verifying backward compatibility...", unarPath)
+		dstDir := filepath.Join(tmpDir, "unar_dst")
+		os.MkdirAll(dstDir, 0755)
+
+		cmd := exec.Command(unarPath, "-o", dstDir, zipPath)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("unar extraction of outer ZIP failed: %v, output: %s", err, string(output))
+		}
+
+		innerZip := filepath.Join(dstDir, "solid.zip")
+		innerDst := filepath.Join(dstDir, "inner")
+		cmdInner := exec.Command(unarPath, "-o", innerDst, innerZip)
+		if output, err := cmdInner.CombinedOutput(); err != nil {
+			t.Fatalf("unar extraction of inner ZIP failed: %v, output: %s", err, string(output))
+		}
+
+		data, err := os.ReadFile(filepath.Join(innerDst, "solid", "src", "test.txt"))
+		if err != nil {
+			data, err = os.ReadFile(filepath.Join(innerDst, "src", "test.txt"))
+		}
+		if err != nil {
+			t.Fatalf("Failed to read file extracted by unar: %v", err)
+		}
+		if string(data) != "solid metadata content" {
+			t.Errorf("Content mismatch in file extracted by unar: expected 'solid metadata content', got %q", string(data))
+		}
+		t.Log("[DEBUG TEST] unar compatibility verified successfully!")
+	}
+}
+
 func TestExternalZip_Zip(t *testing.T) {
 	zipPath, err := exec.LookPath("zip")
 	if err != nil {
