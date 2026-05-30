@@ -6,7 +6,9 @@ package zip
 import (
 	"context"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -222,5 +224,90 @@ func TestXattrs_Zip(t *testing.T) {
 	}
 	if string(val[:sz]) != "testvalue" {
 		t.Errorf("Expected 'testvalue', got %s", string(val[:sz]))
+	}
+}
+
+func TestUnixOwnerStrings_Zip(t *testing.T) {
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "owner.zip")
+	dstDir1 := filepath.Join(tmpDir, "extract_resolved")
+	dstDir2 := filepath.Join(tmpDir, "extract_numeric")
+
+	f, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := NewWriter(f)
+
+	currentUser, err := user.Current()
+	if err != nil {
+		t.Skip("Skipping user resolution test as current user lookup failed")
+	}
+	currentGroup, _ := user.LookupGroupId(currentUser.Gid)
+
+	fh := &FileHeader{
+		Name: "test_owner.txt",
+		Uid:  9999,
+		Gid:  9999,
+	}
+	fh.OwnerSet = true
+	fh.Uname = currentUser.Username
+	if currentGroup != nil {
+		fh.Gname = currentGroup.Name
+	}
+
+	w, err := zw.CreateHeader(fh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Write([]byte("owner data"))
+	zw.Close()
+	f.Close()
+
+	e1, err := NewExtractor(zipPath, dstDir1, WithExtractorChownErrorHandler(func(name string, err error) error {
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e1.Extract(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e1.Close()
+
+	e2, err := NewExtractor(zipPath, dstDir2, WithExtractorNumericOwner(true), WithExtractorChownErrorHandler(func(name string, err error) error {
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e2.Extract(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e2.Close()
+
+	zr, err := OpenReader(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zr.Close()
+
+	fileHeader := &zr.File[0].FileHeader
+
+	resolvedUid, resolvedGid := resolveIds(fileHeader, false)
+	expectedUid, _ := strconv.Atoi(currentUser.Uid)
+	if resolvedUid != expectedUid {
+		t.Errorf("Expected resolved UID %d, got %d", expectedUid, resolvedUid)
+	}
+	if currentGroup != nil {
+		expectedGid, _ := strconv.Atoi(currentGroup.Gid)
+		if resolvedGid != expectedGid {
+			t.Errorf("Expected resolved GID %d, got %d", expectedGid, resolvedGid)
+		}
+	}
+
+	numericUid, numericGid := resolveIds(fileHeader, true)
+	if numericUid != 9999 || numericGid != 9999 {
+		t.Errorf("Expected numeric UID/GID 9999/9999, got %d/%d", numericUid, numericGid)
 	}
 }

@@ -25,3 +25,7 @@ func applyXattrs(path string, hdr *FileHeader) error {
 	}
 	return nil
 }
+
+func resolveIds(hdr *FileHeader, numericOwner bool) (int, int) {
+	return hdr.Uid, hdr.Gid
+}

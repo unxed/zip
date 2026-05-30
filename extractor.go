@@ -39,6 +39,8 @@ type extractorOptions struct {
 	sparse                bool
 	safeWrites            bool
 	unlinkFirst           bool
+	numericOwner          bool
+	incremental           bool
 }
 
 // WithExtractorSafeWrites extracts files atomically by writing to a temporary file and renaming (--safe-writes).
@@ -193,6 +195,22 @@ func WithExtractorChownErrorHandler(fn func(name string, err error) error) Extra
 		return nil
 	}
 }
+
+// WithExtractorNumericOwner always uses numeric user/group IDs from the archive rather than resolving Uname/Gname (--numeric-owner).
+func WithExtractorNumericOwner(b bool) ExtractorOption {
+	return func(o *extractorOptions) error {
+		o.numericOwner = b
+		return nil
+	}
+}
+
+// WithExtractorIncremental enables processing of .zip_dumpdir headers to remove deleted files during incremental restores.
+func WithExtractorIncremental(b bool) ExtractorOption {
+	return func(o *extractorOptions) error {
+		o.incremental = b
+		return nil
+	}
+}
 func WithExtractorMaxFileSize(n int64) ExtractorOption {
 	return func(o *extractorOptions) error {
 		o.maxFileSize = n
@@ -272,6 +290,51 @@ func (e *Extractor) Written() (bytes, entries int64) {
 }
 
 func (e *Extractor) Extract(ctx context.Context) (err error) {
+	if len(e.zr.File) == 1 && (e.zr.File[0].Name == "solid.zip" || strings.HasSuffix(e.zr.File[0].Name, ".solid")) {
+		tempFile, err := os.CreateTemp("", "solid_zip_*.zip")
+		if err != nil {
+			return err
+		}
+		defer os.Remove(tempFile.Name())
+		defer tempFile.Close()
+
+		r, err := e.zr.File[0].Open()
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(tempFile, r)
+		r.Close()
+		if err != nil {
+			return err
+		}
+
+		innerOpts := []ExtractorOption{
+			WithExtractorConcurrency(e.options.concurrency),
+			WithExtractorChownErrorHandler(e.options.chownErrorHandler),
+			WithExtractorMaxFileSize(e.options.maxFileSize),
+			WithExtractorMaxRatio(e.options.maxDecompressionRatio),
+			WithExtractorXattrs(e.options.xattrs),
+			WithExtractorKeepBroken(e.options.keepBroken),
+			WithExtractorKeepOldFiles(e.options.keepOldFiles),
+			WithExtractorKeepNewerFiles(e.options.keepNewerFiles),
+			WithExtractorNoTimes(e.options.noTimes),
+			WithExtractorStripComponents(e.options.stripComponents),
+			WithExtractorSparse(e.options.sparse),
+			WithExtractorSafeWrites(e.options.safeWrites),
+			WithExtractorUnlinkFirst(e.options.unlinkFirst),
+			WithExtractorNumericOwner(e.options.numericOwner),
+			WithExtractorIncremental(e.options.incremental),
+		}
+
+		innerExtractor, err := NewExtractor(tempFile.Name(), e.chroot, innerOpts...)
+		if err != nil {
+			return err
+		}
+		defer innerExtractor.Close()
+
+		return innerExtractor.Extract(ctx)
+	}
+
 	limiter := make(chan struct{}, e.options.concurrency)
 
 	wg, ctx := errgroup.WithContext(ctx)
@@ -397,6 +460,52 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 		err = e.updateFileMetadata(path, file)
 		if err != nil {
 			return err
+		}
+	}
+
+	if e.options.incremental {
+		var dumpdirFile *File
+		for _, file := range e.zr.File {
+			if file.Name == ".zip_dumpdir" {
+				dumpdirFile = file
+				break
+			}
+		}
+		if dumpdirFile != nil {
+			r, err := dumpdirFile.Open()
+			if err == nil {
+				defer r.Close()
+				scanner := bufio.NewScanner(r)
+				activeFiles := make(map[string]bool)
+				for scanner.Scan() {
+					line := strings.TrimSpace(scanner.Text())
+					if line != "" {
+						activeFiles[line] = true
+					}
+				}
+				activeFiles[".zip_dumpdir"] = true
+
+				filepath.Walk(e.chroot, func(path string, info os.FileInfo, err error) error {
+					if err != nil {
+						return err
+					}
+					if path == e.chroot {
+						return nil
+					}
+					rel, err := filepath.Rel(e.chroot, path)
+					if err != nil {
+						return err
+					}
+					relClean := filepath.ToSlash(rel)
+					if info.IsDir() {
+						relClean += "/"
+					}
+					if !activeFiles[relClean] {
+						os.RemoveAll(path)
+					}
+					return nil
+				})
+			}
 		}
 	}
 
@@ -575,7 +684,8 @@ func (e *Extractor) updateFileMetadata(path string, file *File) error {
 		return nil
 	}
 
-	err := lchown(path, file.Uid, file.Gid)
+	uid, gid := resolveIds(&file.FileHeader, e.options.numericOwner)
+	err := lchown(path, uid, gid)
 	if err == nil {
 		return nil
 	}

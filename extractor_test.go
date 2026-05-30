@@ -520,3 +520,93 @@ func TestExtractor_SparseExtraction(t *testing.T) {
 	}
 }
 
+func TestSolidAndIncremental_Zip(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "src")
+	dstDir := filepath.Join(tmpDir, "dst")
+	zipPath := filepath.Join(tmpDir, "solid_inc.zip")
+
+	os.MkdirAll(srcDir, 0755)
+	os.WriteFile(filepath.Join(srcDir, "stay.txt"), []byte("stay data"), 0644)
+	os.WriteFile(filepath.Join(srcDir, "deleted.txt"), []byte("to be deleted"), 0644)
+
+	// 1. Упаковываем файлы в Solid ZIP с сохранением инкрементального индекса
+	f, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a, err := NewArchiver(f, srcDir, WithArchiverSolid(true), WithArchiverIncremental(true), WithArchiverMethod(ZSTD))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	filesMap := make(map[string]os.FileInfo)
+	filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
+		if path != srcDir {
+			filesMap[path] = info
+		}
+		return nil
+	})
+
+	if err := a.Archive(context.Background(), filesMap); err != nil {
+		t.Fatal(err)
+	}
+	a.Close()
+	f.Close()
+
+	// 2. Распаковываем файлы в первый раз
+	e, err := NewExtractor(zipPath, dstDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Extract(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e.Close()
+
+	if _, err := os.Stat(filepath.Join(dstDir, "stay.txt")); err != nil {
+		t.Errorf("file 'stay.txt' was not extracted")
+	}
+	if _, err := os.Stat(filepath.Join(dstDir, "deleted.txt")); err != nil {
+		t.Errorf("file 'deleted.txt' was not extracted")
+	}
+
+	// 3. Создаем новый инкрементальный архив, в котором файл 'deleted.txt' больше не присутствует
+	os.Remove(filepath.Join(srcDir, "deleted.txt"))
+	os.Remove(zipPath)
+
+	f2, _ := os.Create(zipPath)
+	a2, _ := NewArchiver(f2, srcDir, WithArchiverSolid(true), WithArchiverIncremental(true), WithArchiverMethod(ZSTD))
+
+	filesMap2 := make(map[string]os.FileInfo)
+	filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
+		if path != srcDir {
+			filesMap2[path] = info
+		}
+		return nil
+	})
+
+	a2.Archive(context.Background(), filesMap2)
+	a2.Close()
+	f2.Close()
+
+	// 4. Восстанавливаем архив поверх dstDir с флагом WithExtractorIncremental(true)
+	e2, err := NewExtractor(zipPath, dstDir, WithExtractorIncremental(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e2.Extract(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e2.Close()
+
+	// Файл 'stay.txt' должен остаться, а 'deleted.txt' — удален
+	if _, err := os.Stat(filepath.Join(dstDir, "stay.txt")); err != nil {
+		t.Errorf("file 'stay.txt' should be kept")
+	}
+	if _, err := os.Stat(filepath.Join(dstDir, "deleted.txt")); !os.IsNotExist(err) {
+		t.Errorf("file 'deleted.txt' was not deleted during incremental restore")
+	}
+}
+

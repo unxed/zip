@@ -112,3 +112,44 @@ func readInt(b []byte) int {
 	}
 	return 0
 }
+
+func appendUnixOwnerNamesExtra(extra []byte, uname, gname string) []byte {
+	payloadSize := 4 + len(uname) + len(gname)
+	buf := make([]byte, 4+payloadSize)
+	binary.LittleEndian.PutUint16(buf[0:2], unixOwnerNameExtraID)
+	binary.LittleEndian.PutUint16(buf[2:4], uint16(payloadSize))
+	binary.LittleEndian.PutUint16(buf[4:6], uint16(len(uname)))
+	copy(buf[6:6+len(uname)], uname)
+	binary.LittleEndian.PutUint16(buf[6+len(uname):8+len(uname)], uint16(len(gname)))
+	copy(buf[8+len(uname):], gname)
+	return append(extra, buf...)
+}
+
+func parseUnixOwnerNamesExtra(extra []byte) (uname, gname string, ok bool) {
+	for len(extra) >= 4 {
+		tag := binary.LittleEndian.Uint16(extra[:2])
+		size := binary.LittleEndian.Uint16(extra[2:4])
+		extra = extra[4:]
+		if int(size) > len(extra) {
+			break
+		}
+		if tag == unixOwnerNameExtraID {
+			if size < 4 {
+				break
+			}
+			ulen := binary.LittleEndian.Uint16(extra[:2])
+			if 4+int(ulen) > int(size) {
+				break
+			}
+			uname = string(extra[2 : 2+ulen])
+			glen := binary.LittleEndian.Uint16(extra[2+ulen : 4+ulen])
+			if 4+int(ulen)+int(glen) > int(size) {
+				break
+			}
+			gname = string(extra[4+ulen : 4+ulen+glen])
+			return uname, gname, true
+		}
+		extra = extra[size:]
+	}
+	return "", "", false
+}

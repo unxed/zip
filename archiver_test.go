@@ -227,6 +227,8 @@ func TestArchiver_MetadataPreservation(t *testing.T) {
 		Name:     "meta.txt",
 		Uid:      123,
 		Gid:      456,
+		Uname:    "testuser",
+		Gname:    "testgroup",
 		OwnerSet: true,
 		Modified: now,
 	}
@@ -244,6 +246,9 @@ func TestArchiver_MetadataPreservation(t *testing.T) {
 	uid, gid, ok := parseUnixExtra(file.Extra)
 	if !ok || uid != 123 || gid != 456 {
 		t.Errorf("Unix metadata not preserved in Archiver: %d:%d (ok=%v)", uid, gid, ok)
+	}
+	if file.Uname != "testuser" || file.Gname != "testgroup" {
+		t.Errorf("Unix owner name strings not preserved in Archiver: %q:%q", file.Uname, file.Gname)
 	}
 }
 func TestArchiver_ZstdParallel(t *testing.T) {

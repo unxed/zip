@@ -5,7 +5,9 @@ package zip
 
 import (
 	"os"
+	"os/user"
 	"runtime"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -62,6 +64,12 @@ func appendPlatformExtra(fi os.FileInfo, hdr *FileHeader, force bool) {
 		hdr.Uid = int(stat.Uid)
 		hdr.Gid = int(stat.Gid)
 		hdr.OwnerSet = true
+		if u, err := user.LookupId(strconv.Itoa(int(stat.Uid))); err == nil {
+			hdr.Uname = u.Username
+		}
+		if g, err := user.LookupGroupId(strconv.Itoa(int(stat.Gid))); err == nil {
+			hdr.Gname = g.Name
+		}
 	}
 	sysPlatformExtra(fi, hdr)
 }

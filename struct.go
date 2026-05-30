@@ -60,8 +60,10 @@ const (
 	unicodeCommentExtraID = 0x6375 // Info-ZIP Unicode Comment Extra Field
 	winzipAesExtraID      = 0x9901 // WinZip AES encryption extra field
 	ntfsAclExtraID        = 0x4453 // Windows NT Security Descriptor (ACL)
-	xattrExtraID          = 0x7878 // Xattrs
+	xattrExtraID          = 0x7878 // Custom: Xattrs
+	unixOwnerNameExtraID  = 0x787a // Custom: Unix owner/group string names
 )
+
 // Abstraction hooks for NTFS security and stream operations to support unit testing on non-Windows platforms.
 var (
 	getFileSecurityFunc           = getFileSecurity
@@ -108,6 +110,8 @@ type FileHeader struct {
 	Uid      int
 	Gid      int
 	OwnerSet bool
+	Uname    string // User name of owner
+	Gname    string // Group name of owner
 	// Hardlinks & Devices
 	Devmajor int64
 	Devminor int64
@@ -296,6 +300,11 @@ func (fh *FileHeader) injectAutoExtras() uint16 {
 	// 3.3 NTFS ACLs (0x4453)
 	if len(fh.Acl) > 0 && !hasTag(ntfsAclExtraID) {
 		fh.Extra = appendNtfsAcl(fh.Extra, fh.Acl)
+	}
+
+	// 3.4 Unix Owner/Group Strings (0x787a)
+	if (fh.Uname != "" || fh.Gname != "") && !hasTag(unixOwnerNameExtraID) {
+		fh.Extra = appendUnixOwnerNamesExtra(fh.Extra, fh.Uname, fh.Gname)
 	}
 
 	// 4. AES Encryption (0x9901)

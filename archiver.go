@@ -39,6 +39,8 @@ type archiverOptions struct {
 	offset      int64
 	includePlatformMetadata bool
 	xattrs                  bool
+	solid                   bool
+	incremental             bool
 }
 
 func WithArchiverMethod(method uint16) ArchiverOption {
@@ -98,6 +100,22 @@ func WithArchiverXattrs(b bool) ArchiverOption {
 	}
 }
 
+// WithArchiverSolid enables solid ZIP-in-ZIP packaging to achieve maximum compression ratio.
+func WithArchiverSolid(b bool) ArchiverOption {
+	return func(o *archiverOptions) error {
+		o.solid = b
+		return nil
+	}
+}
+
+// WithArchiverIncremental includes a .zip_dumpdir index of all active files for incremental restore.
+func WithArchiverIncremental(b bool) ArchiverOption {
+	return func(o *archiverOptions) error {
+		o.incremental = b
+		return nil
+	}
+}
+
 type Archiver struct {
 	written, entries int64
 	zw               *Writer
@@ -143,6 +161,95 @@ func (a *Archiver) Written() (bytes, entries int64) {
 }
 
 func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (err error) {
+	if a.options.solid {
+		tempFile, err := os.CreateTemp(a.options.stageDir, "inner_solid_*.zip")
+		if err != nil {
+			return err
+		}
+		defer os.Remove(tempFile.Name())
+		defer tempFile.Close()
+
+		innerZw := NewWriter(tempFile)
+
+		if a.options.incremental {
+			var list []string
+			for name := range files {
+				path, err := filepath.Abs(name)
+				if err != nil {
+					innerZw.Close()
+					return err
+				}
+				rel, err := filepath.Rel(a.chroot, path)
+				if err != nil {
+					innerZw.Close()
+					return err
+				}
+				relClean := filepath.ToSlash(rel)
+				if files[name].IsDir() {
+					relClean += "/"
+				}
+				list = append(list, relClean)
+			}
+			sort.Strings(list)
+			dumpdirContent := strings.Join(list, "\n") + "\n"
+
+			fh := &FileHeader{
+				Name:   ".zip_dumpdir",
+				Method: Store,
+			}
+			w, err := innerZw.CreateHeader(fh)
+			if err != nil {
+				innerZw.Close()
+				return err
+			}
+			w.Write([]byte(dumpdirContent))
+		}
+
+		origZw := a.zw
+		origMethod := a.options.method
+		origSolid := a.options.solid
+
+		a.zw = innerZw
+		a.options.method = Store
+		a.options.solid = false
+
+		err = a.Archive(ctx, files)
+		innerZw.Close()
+
+		a.zw = origZw
+		a.options.method = origMethod
+		a.options.solid = origSolid
+
+		if err != nil {
+			return err
+		}
+
+		fi, err := tempFile.Stat()
+		if err != nil {
+			return err
+		}
+
+		hdr := &FileHeader{
+			Name:               "solid.zip",
+			Method:             a.options.method,
+			UncompressedSize64: uint64(fi.Size()),
+		}
+		hdr.SetMode(0644)
+
+		tempFile.Seek(0, io.SeekStart)
+
+		a.m.Lock()
+		w, err := a.zw.CreateHeader(hdr)
+		a.m.Unlock()
+		if err != nil {
+			return err
+		}
+
+		_, err = io.Copy(w, tempFile)
+		incOnSuccess(&a.entries, err)
+		return err
+	}
+
 	if a.options.xattrs {
 		type virtualFile struct {
 			path string

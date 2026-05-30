@@ -538,6 +538,11 @@ parseExtras:
 				f.Gid = gid
 				f.OwnerSet = true
 			}
+		case unixOwnerNameExtraID:
+			if uname, gname, ok := parseUnixOwnerNamesExtra(f.Extra); ok {
+				f.Uname = uname
+				f.Gname = gname
+			}
 		case ntfsAclExtraID:
 			f.Acl = parseNtfsAcl(f.Extra)
 		case extTimeExtraID:
