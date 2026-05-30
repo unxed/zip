@@ -60,7 +60,7 @@ const (
 	unicodeCommentExtraID = 0x6375 // Info-ZIP Unicode Comment Extra Field
 	winzipAesExtraID      = 0x9901 // WinZip AES encryption extra field
 	ntfsAclExtraID        = 0x4453 // Windows NT Security Descriptor (ACL)
-	xattrExtraID          = 0x7878 // Custom: Xattrs
+	xattrExtraID          = 0x7811 // Custom: Xattrs
 	unixOwnerNameExtraID  = 0x787a // Custom: Unix owner/group string names
 )
 
@@ -292,7 +292,7 @@ func (fh *FileHeader) injectAutoExtras() uint16 {
 		fh.Extra = appendUnix000dExtra(fh.Extra, fh)
 	}
 
-	// 3.2 Xattrs (0x7878)
+	// 3.2 Xattrs (0x7811)
 	if len(fh.Xattrs) > 0 && !hasTag(xattrExtraID) {
 		fh.Extra = appendXattrs(fh.Extra, fh.Xattrs)
 	}

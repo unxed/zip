@@ -5,10 +5,10 @@ The **f4 ZIP Extensions** provide a set of additional metadata fields and conven
 
 ## 2. Technical Definitions
 
-### 2.1. Unix Extended Attributes (Extra Field `0x7878`)
+### 2.1. Unix Extended Attributes (Extra Field `0x7811`)
 Encodes POSIX Extended Attributes (xattrs) as a series of key-value pairs.
 
-**Header ID:** `0x7878`
+**Header ID:** `0x7811`
 **Data Layout:**
 - `[KeyLength]`: 2 bytes (Little Endian)
 - `[ValueLength]`: 2 bytes (Little Endian)
@@ -55,5 +55,5 @@ A control file stored within the archive to facilitate "incremental restore" or 
 During extraction with "incremental" mode enabled, any file present in the target directory but *NOT* listed in `.zip_dumpdir` SHOULD be deleted.
 
 ## 3. Guidelines for Archiver Developers
-1. **Path Normalization:** Always use `/` as the path separator in `0x7878` keys and filenames, regardless of the host OS.
-2. **Atomicity:** When applying complex metadata like ACLs (`0x4453`) or Xattrs (`0x7878`), apply them *after* the file content has been successfully written and closed.
+1. **Path Normalization:** Always use `/` as the path separator in `0x7811` keys and filenames, regardless of the host OS.
+2. **Atomicity:** When applying complex metadata like ACLs (`0x4453`) or Xattrs (`0x7811`), apply them *after* the file content has been successfully written and closed.
