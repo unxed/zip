@@ -35,15 +35,15 @@ Stores user and group names as UTF-8 strings. This complements the numeric UID/G
 - **Precedence:** On extraction, if the `Uname` exists on the local system, the archiver SHOULD prefer the local UID corresponding to that name over the numeric `Uid` stored in the archive.
 
 ### 2.3. Solid ZIP-in-ZIP Packaging
-A convention where a standard ZIP archive (`solid.zip`) is stored as a single `Store` (Method 0) entry inside an outer ZIP container.
+A convention where an uncompressed ZIP archive (using `Store` / Method 0 for all internal files) is bundled as a single compressed entry named `solid.zip` inside an outer ZIP container.
 
 **Purpose:**
-Provides "solid" compression (similar to `.tar.gz` or `.7z`) for a collection of many small files, which normally suffer from high overhead in ZIP due to per-file headers and dictionary resets.
+Provides "solid" compression (similar to `.tar.gz` or `.7z`) for a collection of many small files, which normally suffer from high overhead in ZIP due to per-file headers and dictionary resets. This perfectly preserves incremental backup capabilities while achieving maximum compression.
 
 **Implementation Details:**
-- The outer entry MUST be named `solid.zip`.
-- The outer entry MUST use the `Store` method.
-- The inner archive is a valid ZIP file.
+- The outer container MUST contain a single compressed entry named `solid.zip`.
+- The outer entry (`solid.zip`) MUST be compressed using a high-efficiency algorithm (e.g., `Deflate`, `Zstd`, `BZIP2`).
+- The inner archive (`solid.zip`) MUST be a valid ZIP file where all files and metadata are stored uncompressed (using the `Store` method).
 
 ### 2.4. Incremental Sync Support (`.zip_dumpdir`)
 A control file stored within the archive to facilitate "incremental restore" or "mirroring" behavior.
@@ -53,6 +53,17 @@ A control file stored within the archive to facilitate "incremental restore" or 
 
 **Behavior:**
 During extraction with "incremental" mode enabled, any file present in the target directory but *NOT* listed in `.zip_dumpdir` SHOULD be deleted.
+### 2.5. Solid Seek Index (Extra Field `0x7812`)
+To allow fast random access (similar to `ratarmount`) inside the highly compressed `solid.zip` stream, the outer entry MAY include a Seek Index extra field.
+
+**Header ID:** `0x7812`
+**Data Layout:**
+- `[ChunkSize]`: 4 bytes (Little Endian, uncompressed block size, e.g., 4MB).
+- `[Offsets...]`: Array of 8-byte (Little Endian) integers representing the absolute byte offset in the compressed stream for the start of each uncompressed chunk.
+
+**Methodological Recommendations:**
+- When extracting a single file from `solid.zip`, the extractor reads the inner Central Directory (located near the end of the uncompressed archive), finds the uncompressed offset of the target file, divides it by `ChunkSize` to find the block index, and uses `Offsets[block_index]` to jump directly to the required compressed block.
+- This requires the outer entry's compression method to support independent block decoding (e.g., Zstandard Seekable Format or chunked DEFLATE with full dictionary flushes).
 
 ## 3. Guidelines for Archiver Developers
 1. **Path Normalization:** Always use `/` as the path separator in `0x7811` keys and filenames, regardless of the host OS.
