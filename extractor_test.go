@@ -1,6 +1,7 @@
 package zip
 
 import (
+    "fmt"
     "bytes"
 	"context"
 	"os"
@@ -700,6 +701,39 @@ func TestSolidFallback_Zip(t *testing.T) {
 	}
 	if string(data) != "some fallback data" {
 		t.Errorf("expected 'some fallback data', got %q", string(data))
+	}
+}
+
+func TestExtractor_ConcurrencyIntegrity(t *testing.T) {
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "stress.zip")
+	dstDir := filepath.Join(tmpDir, "dst")
+
+	// Создаем 100 файлов, каждый содержит свое имя как контент
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	for i := 0; i < 100; i++ {
+		name := fmt.Sprintf("file_%d.txt", i)
+		w, _ := zw.Create(name)
+		w.Write([]byte(name))
+	}
+	zw.Close()
+	f.Close()
+
+	// Распаковываем с высокой параллельностью
+	e, _ := NewExtractor(zipPath, dstDir, WithExtractorConcurrency(20))
+	if err := e.Extract(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e.Close()
+
+	// Проверяем, что каждый файл содержит именно свое имя (не чужое из-за гонки)
+	for i := 0; i < 100; i++ {
+		name := fmt.Sprintf("file_%d.txt", i)
+		data, _ := os.ReadFile(filepath.Join(dstDir, name))
+		if string(data) != name {
+			t.Errorf("Integrity breach at %s: expected %q, got %q", name, name, string(data))
+		}
 	}
 }
 
