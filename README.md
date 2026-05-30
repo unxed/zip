@@ -26,7 +26,12 @@ It combines the stability of the standard library with the best open-source ZIP 
 
 *   **Cross-Platform Metadata:**
     *   **Unix:** Automatic preservation and restoration of UID/GID and extended timestamps.
-    *   **Windows:** Support for reading and writing NTFS Security Descriptors (ACLs).
+    *   **Windows:** Support for reading and writing NTFS Security Descriptors (ACLs), alongside physical pre-allocation to prevent file fragmentation on NTFS.
+
+*   **Safe Extraction & Advanced Policies:**
+    *   **Path Traversal Defense:** Automatic verification to block symlink directory traversal attacks (such as Zip Slip).
+    *   **MOTW Sanitization:** Automatically sanitizes Zone.Identifier (Mark of the Web) streams during extraction.
+    *   **Granular Controls:** Options for safe atomic writes (`SafeWrites`), path component stripping (`StripComponents`), zero-block sparse extraction (`Sparse`), file-timestamp touching/skipping (`NoTimes`), and partial file cleanup on errors (`KeepBroken`).
 
 *   **Legacy Codepage Auto-Detection:** Includes the advanced heuristic algorithm from `7-zip` and `far2l` to automatically fix "mojibake" (garbled text) in filenames from legacy archives created on different operating systems.
 
