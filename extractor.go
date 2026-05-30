@@ -363,8 +363,9 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 			}
 		}()
 
-		for i, file := range e.zr.File {
-			name := file.Name
+		err = func() error {
+			for i, file := range e.zr.File {
+				name := file.Name
 			if e.options.stripComponents > 0 {
 				stripped, ok := stripComponents(name, e.options.stripComponents)
 				if !ok {
@@ -435,8 +436,7 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 
 			default:
 				limiter <- struct{}{}
-				gf := e.zr.File[i]
-				p := path
+				gf, p := e.zr.File[i], path // Local copies
 				wg.Go(func() error {
 					defer func() { <-limiter }()
 					err := e.createFile(ctx, p, gf)
@@ -450,13 +450,19 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 					return err
 				})
 			}
-			if err != nil && !e.options.tolerant {
-				return err
+				if err != nil && !e.options.tolerant {
+					return err
+				}
 			}
-		}
+			return nil
+		}()
 
-		if err := wg.Wait(); err != nil {
+		waitErr := wg.Wait()
+		if err != nil {
 			return err
+		}
+		if waitErr != nil {
+			return waitErr
 		}
 
 		for _, file := range e.zr.File {
