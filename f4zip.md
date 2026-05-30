@@ -56,14 +56,7 @@ A control file stored within the archive to facilitate "incremental restore" or 
 **Behavior:**
 During extraction with "incremental" mode enabled, any file present in the target directory but *NOT* listed in `.zip_dumpdir` SHOULD be deleted.
 
-## 3. Registered Third-Party Fields
-While not exclusive to f4, this library prioritizes the following standard/semi-standard fields:
-- `0x000d`: Info-ZIP Unix Extra Field (used for hardlinks, device nodes, and FIFOs).
-- `0x4453`: Windows NT Security Descriptor (Raw Binary ACL).
-- `0x7875`: Info-ZIP New Unix (Numeric UID/GID).
-- `0x5455`: Extended Timestamp (Modified/Accessed/Created).
-
-## 4. Guidelines for Archiver Developers
+## 3. Guidelines for Archiver Developers
 1. **Graceful Degradation:** All extensions use the standard ZIP "Extra Field" mechanism. Unknown IDs MUST be ignored by other tools.
 2. **Path Normalization:** Always use `/` as the path separator in `0x7878` keys and filenames, regardless of the host OS.
 3. **Atomicity:** When applying complex metadata like ACLs (`0x4453`) or Xattrs (`0x7878`), apply them *after* the file content has been successfully written and closed.
