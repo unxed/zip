@@ -25,7 +25,7 @@ It combines the stability of the standard library with the best open-source ZIP 
 *   **In-Place Updates (Updater):** Modify existing ZIP files by appending or overwriting entries without performing a full re-compression of the entire archive.
 
 *   **Cross-Platform Metadata:**
-    *   **Unix:** Automatic preservation and restoration of UID/GID and extended timestamps.
+    *   **Unix:** Automatic preservation and restoration of UID/GID, extended timestamps, symlinks, hardlinks, and special files (Devices, FIFOs).
     *   **Windows:** Support for reading and writing NTFS Security Descriptors (ACLs), alongside physical pre-allocation to prevent file fragmentation on NTFS.
 
 *   **Safe Extraction & Advanced Policies:**

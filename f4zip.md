@@ -58,6 +58,7 @@ During extraction with "incremental" mode enabled, any file present in the targe
 
 ## 3. Registered Third-Party Fields
 While not exclusive to f4, this library prioritizes the following standard/semi-standard fields:
+- `0x000d`: Info-ZIP Unix Extra Field (used for hardlinks, device nodes, and FIFOs).
 - `0x4453`: Windows NT Security Descriptor (Raw Binary ACL).
 - `0x7875`: Info-ZIP New Unix (Numeric UID/GID).
 - `0x5455`: Extended Timestamp (Modified/Accessed/Created).
