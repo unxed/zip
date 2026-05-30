@@ -1,9 +1,7 @@
 # f4 ZIP Extensions Specification (Version 0.1)
 
 ## 1. Abstract
-The **f4 ZIP Extensions** provide a set of additional metadata fields and conventions designed to enhance cross-platform file system fidelity within ZIP archives.
-
-These extensions were originally developed for the **f4 file manager** — a cross-platform, asynchronous clone of Far Manager. The goal was to provide "first-class" support for all popular archive types across different operating systems, ensuring that permissions, extended attributes, and ownership are preserved even when archives are moved between different OS kernels.
+The **f4 ZIP Extensions** provide a set of additional metadata fields and conventions designed to enhance cross-platform file system fidelity within ZIP archives. These extensions were originally developed for `unxed/zip` golang library used in the **f4** — a cross-platform, asynchronous Far Manager clone.
 
 ## 2. Technical Definitions
 
