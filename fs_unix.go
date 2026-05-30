@@ -57,5 +57,5 @@ func appendPlatformExtra(fi os.FileInfo, hdr *FileHeader, force bool) {
 		hdr.Gid = int(stat.Gid)
 		hdr.OwnerSet = true
 	}
-	// On Unix, we don't automatically generate NTFS ACLs
+	sysPlatformExtra(fi, hdr)
 }

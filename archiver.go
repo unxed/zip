@@ -38,6 +38,7 @@ type archiverOptions struct {
 	stageDir    string
 	offset      int64
 	includePlatformMetadata bool
+	xattrs                  bool
 }
 
 func WithArchiverMethod(method uint16) ArchiverOption {
@@ -89,12 +90,21 @@ func WithArchiverPlatformMetadata(enable bool) ArchiverOption {
 	}
 }
 
+// WithArchiverXattrs enables archiving of extended attributes (xattrs, POSIX ACLs, SELinux).
+func WithArchiverXattrs(b bool) ArchiverOption {
+	return func(o *archiverOptions) error {
+		o.xattrs = b
+		return nil
+	}
+}
+
 type Archiver struct {
 	written, entries int64
 	zw               *Writer
 	options          archiverOptions
 	chroot           string
 	m                sync.Mutex
+	seenHardLinks    map[hardlinkKey]string
 }
 
 func NewArchiver(w io.Writer, chroot string, opts ...ArchiverOption) (*Archiver, error) {
@@ -104,7 +114,8 @@ func NewArchiver(w io.Writer, chroot string, opts ...ArchiverOption) (*Archiver,
 	}
 
 	a := &Archiver{
-		chroot: chroot,
+		chroot:        chroot,
+		seenHardLinks: make(map[hardlinkKey]string),
 	}
 
 	a.options.method = Deflate
@@ -162,7 +173,7 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 
 	for i, name := range names {
 		fi := files[name]
-		if fi.Mode()&irregularModes != 0 {
+		if fi.Mode()&os.ModeSocket != 0 {
 			continue
 		}
 
@@ -189,12 +200,49 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 
 		switch {
 		case hdr.Mode()&os.ModeSymlink != 0:
+			if a.options.xattrs {
+				sysXattrs(path, hdr)
+			}
 			err = a.createSymlink(path, fi, hdr)
 
 		case hdr.Mode().IsDir():
+			if a.options.xattrs {
+				sysXattrs(path, hdr)
+			}
 			err = a.createDirectory(fi, hdr)
 
 		default:
+			link := getHardLinkTarget(fi, a.seenHardLinks)
+			if link != "" {
+				hdr.Linkname = link
+				hdr.Method = Store
+				hdr.CompressedSize64 = 0
+				hdr.UncompressedSize64 = 0
+				hdr.CRC32 = 0
+				if a.options.xattrs {
+					sysXattrs(path, hdr)
+				}
+				err = a.createHardlink(fi, hdr)
+				break
+			}
+			rememberHardLink(fi, rel, a.seenHardLinks)
+
+			if hdr.Mode()&irregularModes != 0 {
+				hdr.Method = Store
+				hdr.CompressedSize64 = 0
+				hdr.UncompressedSize64 = 0
+				hdr.CRC32 = 0
+				if a.options.xattrs {
+					sysXattrs(path, hdr)
+				}
+				err = a.createSpecialFile(fi, hdr)
+				break
+			}
+
+			if a.options.xattrs {
+				sysXattrs(path, hdr)
+			}
+
 			if hdr.UncompressedSize64 > 0 {
 				hdr.Method = a.options.method
 			}
@@ -204,8 +252,11 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 				incOnSuccess(&a.entries, err)
 			} else {
 				f := fp.Get()
+				p := path
+				fInfo := fi
+				h := hdr
 				wg.Go(func() error {
-					err := a.createFile(ctx, path, fi, hdr, f)
+					err := a.createFile(ctx, p, fInfo, h, f)
 					fp.Put(f)
 					incOnSuccess(&a.entries, err)
 					return err
@@ -243,6 +294,23 @@ func (a *Archiver) createDirectory(fi os.FileInfo, hdr *FileHeader) error {
 	a.m.Lock()
 	defer a.m.Unlock()
 	_, err := a.zw.CreateHeader(hdr)
+	incOnSuccess(&a.entries, err)
+	return err
+}
+func (a *Archiver) createHardlink(fi os.FileInfo, hdr *FileHeader) error {
+	a.m.Lock()
+	defer a.m.Unlock()
+	hdr.Flags &= ^uint16(0x8)
+	_, err := a.createHeaderRaw(fi, hdr)
+	incOnSuccess(&a.entries, err)
+	return err
+}
+
+func (a *Archiver) createSpecialFile(fi os.FileInfo, hdr *FileHeader) error {
+	a.m.Lock()
+	defer a.m.Unlock()
+	hdr.Flags &= ^uint16(0x8)
+	_, err := a.createHeaderRaw(fi, hdr)
 	incOnSuccess(&a.entries, err)
 	return err
 }

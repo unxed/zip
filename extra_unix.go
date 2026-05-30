@@ -1,6 +1,9 @@
 package zip
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"io/fs"
+)
 
 const infoZipNewUnixExtraID = 0x7875
 
@@ -14,6 +17,52 @@ func appendUnixExtra(extra []byte, uid, gid int) []byte {
 	buf[10] = 4 // gid size
 	binary.LittleEndian.PutUint32(buf[11:15], uint32(gid))
 	return append(extra, buf[:]...)
+}
+
+func appendUnix000dExtra(extra []byte, hdr *FileHeader) []byte {
+	varData := []byte{}
+	if hdr.Linkname != "" {
+		varData = []byte(hdr.Linkname)
+	} else if hdr.Mode()&(fs.ModeDevice|fs.ModeCharDevice) != 0 {
+		varData = make([]byte, 8)
+		binary.LittleEndian.PutUint32(varData[0:4], uint32(hdr.Devmajor))
+		binary.LittleEndian.PutUint32(varData[4:8], uint32(hdr.Devminor))
+	}
+
+	if len(varData) == 0 {
+		return extra
+	}
+
+	buf := make([]byte, 16+len(varData))
+	binary.LittleEndian.PutUint16(buf[0:2], unixExtraID)
+	binary.LittleEndian.PutUint16(buf[2:4], uint16(12+len(varData)))
+	binary.LittleEndian.PutUint32(buf[4:8], uint32(hdr.Accessed.Unix()))
+	binary.LittleEndian.PutUint32(buf[8:12], uint32(hdr.Modified.Unix()))
+	binary.LittleEndian.PutUint16(buf[12:14], uint16(hdr.Uid))
+	binary.LittleEndian.PutUint16(buf[14:16], uint16(hdr.Gid))
+	copy(buf[16:], varData)
+	return append(extra, buf...)
+}
+
+func appendXattrs(extra []byte, xattrs map[string]string) []byte {
+	if len(xattrs) == 0 {
+		return extra
+	}
+	var payload []byte
+	for k, v := range xattrs {
+		var kv [4]byte
+		binary.LittleEndian.PutUint16(kv[0:2], uint16(len(k)))
+		binary.LittleEndian.PutUint16(kv[2:4], uint16(len(v)))
+		payload = append(payload, kv[0:2]...)
+		payload = append(payload, []byte(k)...)
+		payload = append(payload, kv[2:4]...)
+		payload = append(payload, []byte(v)...)
+	}
+	var head [4]byte
+	binary.LittleEndian.PutUint16(head[0:2], xattrExtraID)
+	binary.LittleEndian.PutUint16(head[2:4], uint16(len(payload)))
+	extra = append(extra, head[:]...)
+	return append(extra, payload...)
 }
 
 func parseUnixExtra(extra []byte) (uid, gid int, ok bool) {

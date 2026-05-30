@@ -505,7 +505,26 @@ parseExtras:
 				f.Accessed = parseNTFS(&attrBuf)
 				f.Created = parseNTFS(&attrBuf)
 			}
-		case unixExtraID, infoZipUnixExtraID:
+		case unixExtraID:
+			if len(fieldBuf) < 8 {
+				continue parseExtras
+			}
+			fieldBuf.uint32()
+			ts := int64(fieldBuf.uint32())
+			modified = time.Unix(ts, 0)
+			if len(fieldBuf) >= 4 {
+				fieldBuf.uint16() // Uid
+				fieldBuf.uint16() // Gid
+				if len(fieldBuf) > 0 {
+					if f.Mode()&(fs.ModeDevice|fs.ModeCharDevice) != 0 && len(fieldBuf) >= 8 {
+						f.Devmajor = int64(fieldBuf.uint32())
+						f.Devminor = int64(fieldBuf.uint32())
+					} else {
+						f.Linkname = string(fieldBuf)
+					}
+				}
+			}
+		case infoZipUnixExtraID:
 			if len(fieldBuf) < 8 {
 				continue parseExtras
 			}
@@ -548,6 +567,24 @@ parseExtras:
 			fieldBuf.uint16()
 			// The actual compression method
 			f.aesInfo.actualMethod = fieldBuf.uint16()
+
+		case xattrExtraID:
+			if f.Xattrs == nil {
+				f.Xattrs = make(map[string]string)
+			}
+			for len(fieldBuf) >= 4 {
+				klen := int(fieldBuf.uint16())
+				if len(fieldBuf) < klen+2 {
+					break
+				}
+				k := string(fieldBuf.sub(klen))
+				vlen := int(fieldBuf.uint16())
+				if len(fieldBuf) < vlen {
+					break
+				}
+				v := string(fieldBuf.sub(vlen))
+				f.Xattrs[k] = v
+			}
 		}
 	}
 

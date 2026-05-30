@@ -60,6 +60,7 @@ const (
 	unicodeCommentExtraID = 0x6375 // Info-ZIP Unicode Comment Extra Field
 	winzipAesExtraID      = 0x9901 // WinZip AES encryption extra field
 	ntfsAclExtraID        = 0x4453 // Windows NT Security Descriptor (ACL)
+	xattrExtraID          = 0x7878 // Xattrs
 )
 const (
 	// Strong Encryption (SES) Algorithm IDs
@@ -101,6 +102,12 @@ type FileHeader struct {
 	Uid      int
 	Gid      int
 	OwnerSet bool
+	// Hardlinks & Devices
+	Devmajor int64
+	Devminor int64
+	Linkname string
+	// Xattrs
+	Xattrs   map[string]string
 	// NTFS Attributes
 	Acl      []byte // Windows Security Descriptor (ACL)
 
@@ -270,7 +277,17 @@ func (fh *FileHeader) injectAutoExtras() uint16 {
 		fh.Extra = appendUnixExtra(fh.Extra, fh.Uid, fh.Gid)
 	}
 
-	// 3.1 NTFS ACLs (0x4453)
+	// 3.1 Hardlinks & Devices (0x000d)
+	if (fh.Linkname != "" || fh.Mode()&(fs.ModeDevice|fs.ModeCharDevice) != 0) && !hasTag(unixExtraID) {
+		fh.Extra = appendUnix000dExtra(fh.Extra, fh)
+	}
+
+	// 3.2 Xattrs (0x7878)
+	if len(fh.Xattrs) > 0 && !hasTag(xattrExtraID) {
+		fh.Extra = appendXattrs(fh.Extra, fh.Xattrs)
+	}
+
+	// 3.3 NTFS ACLs (0x4453)
 	if len(fh.Acl) > 0 && !hasTag(ntfsAclExtraID) {
 		fh.Extra = appendNtfsAcl(fh.Extra, fh.Acl)
 	}

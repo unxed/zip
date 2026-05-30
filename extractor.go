@@ -25,10 +25,19 @@ var bufioWriterPool = sync.Pool{
 type ExtractorOption func(*extractorOptions) error
 
 type extractorOptions struct {
-	concurrency          int
-	chownErrorHandler    func(name string, err error) error
-	maxFileSize          int64
+	concurrency           int
+	chownErrorHandler     func(name string, err error) error
+	maxFileSize           int64
 	maxDecompressionRatio int64
+	xattrs                bool
+}
+
+// WithExtractorXattrs enables restoration of extended attributes (xattrs, POSIX ACLs, SELinux).
+func WithExtractorXattrs(b bool) ExtractorOption {
+	return func(o *extractorOptions) error {
+		o.xattrs = b
+		return nil
+	}
 }
 
 func WithExtractorConcurrency(n int) ExtractorOption {
@@ -136,10 +145,6 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 	}()
 
 	for i, file := range e.zr.File {
-		if file.Mode()&irregularModes != 0 {
-			continue
-		}
-
 		path, err := filepath.Abs(filepath.Join(e.chroot, file.Name))
 		if err != nil {
 			return err
@@ -158,20 +163,34 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 		}
 
 		switch {
-		case file.Mode()&os.ModeSymlink != 0:
+		case file.Mode()&os.ModeSymlink != 0 || file.Linkname != "":
 			continue
 
 		case file.Mode().IsDir():
 			err = e.createDirectory(path, file)
 
+		case file.Mode()&irregularModes != 0:
+			limiter <- struct{}{}
+			gf := e.zr.File[i]
+			p := path
+			wg.Go(func() error {
+				defer func() { <-limiter }()
+				err := extractSpecialFile(p, &gf.FileHeader)
+				if err == nil {
+					err = e.updateFileMetadata(p, gf)
+				}
+				return err
+			})
+
 		default:
 			limiter <- struct{}{}
 			gf := e.zr.File[i]
+			p := path
 			wg.Go(func() error {
 				defer func() { <-limiter }()
-				err := e.createFile(ctx, path, gf)
+				err := e.createFile(ctx, p, gf)
 				if err == nil {
-					err = e.updateFileMetadata(path, gf)
+					err = e.updateFileMetadata(p, gf)
 				}
 				return err
 			})
@@ -186,14 +205,14 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 	}
 
 	for _, file := range e.zr.File {
-		if file.Mode()&os.ModeSymlink == 0 {
+		if file.Mode()&os.ModeSymlink == 0 && file.Linkname == "" {
 			continue
 		}
 		path, err := filepath.Abs(filepath.Join(e.chroot, file.Name))
 		if err != nil {
 			return err
 		}
-		if err := e.createSymlink(path, file); err != nil {
+		if err := e.createLink(path, file); err != nil {
 			return err
 		}
 	}
@@ -224,27 +243,32 @@ func (e *Extractor) createDirectory(path string, file *File) error {
 	return err
 }
 
-func (e *Extractor) createSymlink(path string, file *File) error {
+func (e *Extractor) createLink(path string, file *File) error {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 
-	r, err := file.Open()
-	if err != nil {
-		return err
+	if file.Mode()&os.ModeSymlink != 0 {
+		r, err := file.Open()
+		if err != nil {
+			return err
+		}
+		name, err := io.ReadAll(r)
+		r.Close()
+		if err != nil {
+			return err
+		}
+		if err := os.Symlink(string(name), path); err != nil {
+			return err
+		}
+	} else if file.Linkname != "" {
+		targetPath := filepath.Join(e.chroot, file.Linkname)
+		if err := os.Link(targetPath, path); err != nil {
+			return err
+		}
 	}
-	defer r.Close()
 
-	name, err := io.ReadAll(r)
-	if err != nil {
-		return err
-	}
-
-	if err := os.Symlink(string(name), path); err != nil {
-		return err
-	}
-
-	err = e.updateFileMetadata(path, file)
+	err := e.updateFileMetadata(path, file)
 	incOnSuccess(&e.entries, err)
 
 	return err
@@ -325,6 +349,10 @@ func (e *Extractor) updateFileMetadata(path string, file *File) error {
 	// Apply Windows ACL if present
 	if len(file.Acl) > 0 {
 		applyNtfsAcl(path, file.Acl)
+	}
+
+	if e.options.xattrs {
+		applyXattrs(path, &file.FileHeader)
 	}
 
 	if !file.OwnerSet {
