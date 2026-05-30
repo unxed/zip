@@ -209,16 +209,9 @@ for _, f := range r.File {
 
 ## Format Extensions
 
-This library extends the standard ZIP format by proposing and supporting **f4 zip extensions**, several advanced extra fields and metadata structures. These extensions provide advanced metadata structures while remaining fully standard-compliant (standard ZIP utilities will safely skip them).
+This library extends the standard ZIP format by proposing **f4 zip extensions**. These extensions provide advanced metadata support while remaining fully standard-compliant (standard ZIP utilities will safely skip them).
 
-The extensions include:
-
-*   **Unix Extended Attributes (`0x7811`)**: Encodes complete POSIX extended attributes (xattrs), including `user.*`, `system.*` (ACLs), and `security.*` (SELinux contexts) namespaces as key-value pairs.
-*   **Unix Owner Names (`0x7817`)**: Stores string user (`Uname`) and group (`Gname`) owner names. This complements numeric UID/GID (`0x7875`), enabling user-name-based file ownership restoration on systems where numeric IDs differ.
-*   **Solid ZIP-in-ZIP Packaging**: Bundles a nested uncompressed `Store` ZIP archive as a single compressed outer entry `solid.zip`. This achieves maximum solid compression ratios (similar to TAR) while keeping the outer archive fully readable by standard tools.
-*   **Incremental Sync Support**: Facilitates state synchronization by storing a `.zip_dumpdir` index file within archives. The extractor can use this index to remove files from the destination directory that are no longer present in the backup, effectively behaving like GNU tar's incremental restore.
-
-See the full technical specification in [f4zip.md](./f4zip.md).
+See the technical specification in [f4zip.md](./f4zip.md).
 
 ### Why "f4"?
 
