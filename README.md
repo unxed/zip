@@ -207,9 +207,9 @@ for _, f := range r.File {
 }
 ```
 
-## Pluggable Format Extensions
+## Format Extensions
 
-This library extends the standard ZIP format by supporting and proposing several advanced extra fields and metadata structures. These are fully standard-compliant, meaning any standard ZIP utility will safely skip them, while this library's extractor will parse and restore them:
+This library extends the standard ZIP format by proposing and supporting several advanced extra fields and metadata structures. These are fully standard-compliant, meaning any standard ZIP utility will safely skip them, while this library's extractor will parse and restore them:
 
 *   **Unix Extended Attributes (`0x7878`)**: Encodes complete POSIX extended attributes (xattrs), including `user.*`, `system.*` (ACLs), and `security.*` (SELinux contexts) namespaces as key-value pairs.
 *   **Unix Owner Names (`0x787a`)**: Stores string user (`Uname`) and group (`Gname`) owner names. This complements numeric UID/GID (`0x7875`), enabling user-name-based file ownership restoration on systems where numeric IDs differ.
