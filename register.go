@@ -43,6 +43,15 @@ func (w *pooledFlateWriter) Write(p []byte) (n int, err error) {
 	return w.fw.Write(p)
 }
 
+func (w *pooledFlateWriter) Flush() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.fw == nil {
+		return errors.New("Flush after Close")
+	}
+	return w.fw.Flush()
+}
+
 func (w *pooledFlateWriter) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -147,6 +156,15 @@ func (pw *pooledZstdWriter) Write(p []byte) (int, error) {
 		return 0, errors.New("Write after Close")
 	}
 	return pw.enc.Write(p)
+}
+
+func (pw *pooledZstdWriter) Flush() error {
+	pw.mu.Lock()
+	defer pw.mu.Unlock()
+	if pw.enc == nil {
+		return errors.New("Flush after Close")
+	}
+	return pw.enc.Flush()
 }
 
 func (pw *pooledZstdWriter) Close() error {

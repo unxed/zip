@@ -60,6 +60,53 @@ func (w *Writer) SetComment(comment string) error {
 	w.comment = comment
 	return nil
 }
+type flusher interface {
+	Flush() error
+}
+
+type chunkSeekWriter struct {
+	h          *header
+	comp       io.WriteCloser
+	base       *countWriter // physically writes to zip
+	chunkSize  uint32
+	written    uint32
+	dataStart  int64
+	totalWrite int64
+}
+
+func (c *chunkSeekWriter) Write(p []byte) (n int, err error) {
+	for len(p) > 0 {
+		toWrite := int(c.chunkSize) - int(c.written)
+		if toWrite > len(p) {
+			toWrite = len(p)
+		}
+
+		wn, err := c.comp.Write(p[:toWrite])
+		if err != nil {
+			return n, err
+		}
+		n += wn
+		c.written += uint32(wn)
+		c.totalWrite += int64(wn)
+		p = p[wn:]
+
+		if c.written >= c.chunkSize {
+			// Only flush and record if we are NOT at the very end of the file.
+			// If we are at the end, Close() will handle it.
+			// If UncompressedSize64 is 0 (unknown), we must record to be safe.
+			if c.h.UncompressedSize64 == 0 || c.totalWrite < int64(c.h.UncompressedSize64) {
+				if f, ok := c.comp.(flusher); ok {
+					f.Flush()
+				}
+				// Record relative offset from the start of compressed data
+				relativeOffset := c.base.count - c.dataStart
+				c.h.SeekIndex = append(c.h.SeekIndex, uint64(relativeOffset))
+			}
+			c.written = 0
+		}
+	}
+	return n, nil
+}
 // SetEncryptCentralDirectory enables encryption of the central directory records.
 // This hides file names and metadata from unauthorized users.
 // Requires a password to be set.
@@ -350,9 +397,24 @@ func (w *Writer) CreateHeader(fh *FileHeader) (io.Writer, error) {
 		if err != nil {
 			return nil, err
 		}
-		fw.rawCount = &countWriter{w: fw.comp}
+
 		fw.header = h
-		ow = fw
+		if fh.SeekChunkSize > 0 && originalMethod != Store {
+			// First block always starts at 0 (relative to data start)
+			h.SeekIndex = []uint64{0}
+			csw := &chunkSeekWriter{
+				h:         h,
+				comp:      fw.comp,
+				base:      fw.compCount,
+				chunkSize: fh.SeekChunkSize,
+				dataStart: fw.compCount.count,
+			}
+			fw.rawCount = &countWriter{w: csw}
+			ow = fw
+		} else {
+			fw.rawCount = &countWriter{w: fw.comp}
+			ow = fw
+		}
 		w.last = fw
 	}
 	w.dir = append(w.dir, h)
@@ -556,6 +618,10 @@ func (w *fileWriter) close() error {
 			return err
 		}
 	}
+
+	// Important: call injectAutoExtras AGAIN to serialize the SeekIndex
+	// which was populated during the Write calls.
+	w.header.injectAutoExtras()
 
 	fh := w.header.FileHeader
 	if w.isAES {

@@ -63,7 +63,6 @@ const (
 	//                             // 0x756f..0x7810 unused
 	xattrExtraID          = 0x7811 // f4 extensions: Xattrs
 	solidSeekIndexExtraID = 0x7812 // f4 extensions: Solid Seek Index (ratarmount-like)
-	//                      0x7812 // Reserved for further f4 extensions versions
 	//                      0x7813 // Reserved for further f4 extensions versions
 	//                      0x7814 // Reserved for further f4 extensions versions
 	//                      0x7815 // Reserved for further f4 extensions versions
@@ -131,6 +130,10 @@ type FileHeader struct {
 	Xattrs   map[string]string
 	// NTFS Attributes
 	Acl      []byte // Windows Security Descriptor (ACL)
+
+	// Seek Index (f4 extension 0x7812)
+	SeekChunkSize uint32   // Uncompressed block size (e.g. 1MB)
+	SeekIndex     []uint64 // Compressed offsets for each block
 
 	// WinZip AES encryption
 	Password    string
@@ -260,20 +263,37 @@ func (fh *FileHeader) injectAutoExtras() uint16 {
 		extTimeFlags |= 4
 	}
 
-	// Simple check to avoid duplicate tag injection
-	hasTag := func(id uint16) bool {
+	// Helper to check or remove tags
+	findTag := func(id uint16) (int, int) {
+		offset := 0
 		for eb := readBuf(fh.Extra); len(eb) >= 4; {
 			tag := eb.uint16()
 			size := int(eb.uint16())
 			if tag == id {
-				return true
+				return offset, 4 + size
 			}
 			if len(eb) < size {
 				break
 			}
 			eb = eb[size:]
+			offset += 4 + size
 		}
-		return false
+		return -1, 0
+	}
+
+	removeTag := func(id uint16) {
+		off, size := findTag(id)
+		if off >= 0 {
+			newExtra := make([]byte, 0, len(fh.Extra)-size)
+			newExtra = append(newExtra, fh.Extra[:off]...)
+			newExtra = append(newExtra, fh.Extra[off+size:]...)
+			fh.Extra = newExtra
+		}
+	}
+
+	hasTag := func(id uint16) bool {
+		off, _ := findTag(id)
+		return off >= 0
 	}
 
 	if extTimeFlags > 0 && !hasTag(extTimeExtraID) {
@@ -316,6 +336,22 @@ func (fh *FileHeader) injectAutoExtras() uint16 {
 	// 3.4 Unix Owner/Group Strings (0x7817)
 	if (fh.Uname != "" || fh.Gname != "") && !hasTag(unixOwnerNameExtraID) {
 		fh.Extra = appendUnixOwnerNamesExtra(fh.Extra, fh.Uname, fh.Gname)
+	}
+
+	// 3.5 Seek Index (0x7812)
+	// 3.5 Seek Index (0x7812) - Always replace with latest version if index grew
+	if len(fh.SeekIndex) > 0 && fh.SeekChunkSize > 0 {
+		removeTag(solidSeekIndexExtraID)
+		size := uint16(4 + len(fh.SeekIndex)*8)
+		buf := make([]byte, 4+size)
+		eb := writeBuf(buf)
+		eb.uint16(solidSeekIndexExtraID)
+		eb.uint16(size)
+		eb.uint32(fh.SeekChunkSize)
+		for _, off := range fh.SeekIndex {
+			eb.uint64(off)
+		}
+		fh.Extra = append(fh.Extra, buf...)
 	}
 
 	// 4. AES Encryption (0x9901)

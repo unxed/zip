@@ -135,6 +135,73 @@ func TestZstd_WithDataDescriptor(t *testing.T) {
 		t.Errorf("Data mismatch with DD: got %q", string(data))
 	}
 }
+func TestSolidSeekIndex_RandomAccess(t *testing.T) {
+	// Create a repetitive data set to test seeking
+	chunkSize := uint32(1024)
+	numChunks := 5
+	var fullData bytes.Buffer
+	for i := 0; i < numChunks; i++ {
+		block := bytes.Repeat([]byte{byte('A' + i)}, int(chunkSize))
+		fullData.Write(block)
+	}
+
+	buf := new(bytes.Buffer)
+	zw := NewWriter(buf)
+
+	fh := &FileHeader{
+		Name:               "seekable.bin",
+		Method:             Deflate,
+		SeekChunkSize:      chunkSize,
+		UncompressedSize64: uint64(fullData.Len()),
+	}
+
+	w, _ := zw.CreateHeader(fh)
+	w.Write(fullData.Bytes())
+	zw.Close()
+
+	// Read and verify seek index
+	zr, err := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f := zr.File[0]
+	if f.SeekChunkSize != chunkSize {
+		t.Errorf("expected chunk size %d, got %d", chunkSize, f.SeekChunkSize)
+	}
+	if len(f.SeekIndex) != numChunks {
+		t.Errorf("expected %d index entries, got %d", numChunks, len(f.SeekIndex))
+	}
+
+	rs, err := f.OpenSeekable()
+	if err != nil {
+		t.Fatalf("failed to open seekable: %v", err)
+	}
+
+	// 1. Seek to block 3 (char 'D')
+	targetOff := int64(chunkSize * 3)
+	rs.Seek(targetOff, io.SeekStart)
+
+	out := make([]byte, 10)
+	io.ReadFull(rs, out)
+	if string(out) != "DDDDDDDDDD" {
+		t.Errorf("seek to block 3 failed, got %q", string(out))
+	}
+
+	// 2. Seek back to block 1 (char 'B')
+	rs.Seek(int64(chunkSize), io.SeekStart)
+	io.ReadFull(rs, out)
+	if string(out) != "BBBBBBBBBB" {
+		t.Errorf("seek to block 1 failed, got %q", string(out))
+	}
+
+	// 3. Test EOF
+	rs.Seek(0, io.SeekEnd)
+	n, err := rs.Read(out)
+	if n != 0 || err != io.EOF {
+		t.Errorf("expected EOF at end of file, got n=%d, err=%v", n, err)
+	}
+}
 func TestRegister_Panics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {

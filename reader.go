@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"hash"
 	"hash/crc32"
 	"io"
@@ -335,6 +336,100 @@ func (f *File) OpenRaw() (io.Reader, error) {
 	return r, nil
 }
 
+// OpenSeekable returns a ReadSeeker for the file content.
+// It requires a Seek Index (0x7812) to be present in the archive for compressed files.
+// If the index is missing, it will return an error for compressed files.
+// For Uncompressed (Store) files, it works natively.
+func (f *File) OpenSeekable() (io.ReadSeeker, error) {
+	if f.Method == Store {
+		bodyOffset, err := f.findBodyOffset()
+		if err != nil {
+			return nil, err
+		}
+		return io.NewSectionReader(f.zipr, f.headerOffset+bodyOffset, int64(f.UncompressedSize64)), nil
+	}
+
+	if len(f.SeekIndex) == 0 || f.SeekChunkSize == 0 {
+		return nil, errors.New("zip: seek index missing or invalid for compressed file")
+	}
+
+	return &solidReadSeeker{f: f}, nil
+}
+
+type solidReadSeeker struct {
+	f      *File
+	off    int64
+	currRC io.ReadCloser
+}
+
+func (s *solidReadSeeker) Seek(offset int64, whence int) (int64, error) {
+	var newOff int64
+	switch whence {
+	case io.SeekStart:
+		newOff = offset
+	case io.SeekCurrent:
+		newOff = s.off + offset
+	case io.SeekEnd:
+		newOff = int64(s.f.UncompressedSize64) + offset
+	}
+	if newOff < 0 || newOff > int64(s.f.UncompressedSize64) {
+		return 0, errors.New("zip: invalid seek offset")
+	}
+	if newOff != s.off && s.currRC != nil {
+		s.currRC.Close()
+		s.currRC = nil
+	}
+	s.off = newOff
+	return s.off, nil
+}
+
+func (s *solidReadSeeker) Read(p []byte) (int, error) {
+	if s.off >= int64(s.f.UncompressedSize64) {
+		return 0, io.EOF
+	}
+
+	if s.currRC == nil {
+		blockIdx := s.off / int64(s.f.SeekChunkSize)
+		if blockIdx >= int64(len(s.f.SeekIndex)) {
+			return 0, io.EOF
+		}
+
+		compOffset := int64(s.f.SeekIndex[blockIdx])
+		bodyOffset, err := s.f.findBodyOffset()
+		fmt.Printf("[DEBUG-SEEK] Reading block %d. Uncompressed offset: %d, SeekIndex entry (compressed offset): %d, BodyOffset: %d\n", blockIdx, s.off, compOffset, bodyOffset)
+		if err != nil {
+			return 0, err
+		}
+
+		// WinZip AES or regular? 
+		// Note: Seeking inside AES streams is complex due to CTR state,
+		// but since we Flush the compressor, we assume we reset the state at block boundaries.
+		
+		totalCompSize := int64(s.f.CompressedSize64)
+		remainingComp := totalCompSize - compOffset
+		
+		section := io.NewSectionReader(s.f.zipr, s.f.headerOffset+bodyOffset+compOffset, remainingComp)
+		
+		dcomp := s.f.zip.decompressor(s.f.Method)
+		if dcomp == nil {
+			return 0, ErrAlgorithm
+		}
+		s.currRC = dcomp(section)
+
+		// Skip bytes within the block
+		skip := s.off % int64(s.f.SeekChunkSize)
+		if skip > 0 {
+			if _, err := io.CopyN(io.Discard, s.currRC, skip); err != nil {
+				return 0, err
+			}
+		}
+	}
+
+	n, err := s.currRC.Read(p)
+	s.off += int64(n)
+	return n, err
+}
+
 type cipherReader struct {
 	r      io.Reader
 	crypto *zipCrypto
@@ -632,6 +727,19 @@ parseExtras:
 				}
 				v := string(fieldBuf.sub(vlen))
 				f.Xattrs[k] = v
+			}
+
+		case solidSeekIndexExtraID:
+			if len(fieldBuf) < 4 {
+				continue parseExtras
+			}
+			f.SeekChunkSize = fieldBuf.uint32()
+			n := len(fieldBuf) / 8
+			if n > 0 {
+				f.SeekIndex = make([]uint64, n)
+				for i := 0; i < n; i++ {
+					f.SeekIndex[i] = fieldBuf.uint64()
+				}
 			}
 		}
 	}
