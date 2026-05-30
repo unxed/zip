@@ -702,3 +702,53 @@ func TestSolidFallback_Zip(t *testing.T) {
 	}
 }
 
+func TestExternalZip_Zip(t *testing.T) {
+	zipPath, err := exec.LookPath("zip")
+	if err != nil {
+		t.Skip("Native zip utility not found on this system. Skipping forward compatibility check.")
+	}
+
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "src")
+	os.MkdirAll(srcDir, 0755)
+
+	os.WriteFile(filepath.Join(srcDir, "file1.txt"), []byte("external zip data"), 0644)
+	os.MkdirAll(filepath.Join(srcDir, "sub"), 0755)
+	os.WriteFile(filepath.Join(srcDir, "sub", "file2.txt"), []byte("nested external zip data"), 0644)
+
+	archivePath := filepath.Join(tmpDir, "external.zip")
+
+	cmd := exec.Command(zipPath, "-r", archivePath, ".")
+	cmd.Dir = srcDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("Native zip utility failed: %v, output: %s", err, string(output))
+	}
+
+	dstDir := filepath.Join(tmpDir, "extract")
+	e, err := NewExtractor(archivePath, dstDir)
+	if err != nil {
+		t.Fatalf("Failed to initialize Extractor for external zip: %v", err)
+	}
+	defer e.Close()
+
+	if err := e.Extract(context.Background()); err != nil {
+		t.Fatalf("Extraction of external zip failed: %v", err)
+	}
+
+	data1, err := os.ReadFile(filepath.Join(dstDir, "file1.txt"))
+	if err != nil {
+		t.Fatalf("Failed to read file1.txt: %v", err)
+	}
+	if string(data1) != "external zip data" {
+		t.Errorf("Content mismatch in file1.txt: expected 'external zip data', got %q", string(data1))
+	}
+
+	data2, err := os.ReadFile(filepath.Join(dstDir, "sub", "file2.txt"))
+	if err != nil {
+		t.Fatalf("Failed to read sub/file2.txt: %v", err)
+	}
+	if string(data2) != "nested external zip data" {
+		t.Errorf("Content mismatch in sub/file2.txt: expected 'nested external zip data', got %q", string(data2))
+	}
+}
+
