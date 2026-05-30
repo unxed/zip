@@ -162,14 +162,20 @@ func (a *Archiver) Written() (bytes, entries int64) {
 
 func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (err error) {
 	if a.options.solid {
-		tempFile, err := os.CreateTemp(a.options.stageDir, "inner_solid_*.zip")
+		hdr := &FileHeader{
+			Name:   "solid.zip",
+			Method: a.options.method,
+		}
+		hdr.SetMode(0644)
+
+		a.m.Lock()
+		w, err := a.zw.CreateHeader(hdr)
+		a.m.Unlock()
 		if err != nil {
 			return err
 		}
-		defer os.Remove(tempFile.Name())
-		defer tempFile.Close()
 
-		innerZw := NewWriter(tempFile)
+		innerZw := NewWriter(w)
 
 		if a.options.incremental {
 			var list []string
@@ -197,12 +203,12 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 				Name:   ".zip_dumpdir",
 				Method: Store,
 			}
-			w, err := innerZw.CreateHeader(fh)
+			innerW, err := innerZw.CreateHeader(fh)
 			if err != nil {
 				innerZw.Close()
 				return err
 			}
-			w.Write([]byte(dumpdirContent))
+			innerW.Write([]byte(dumpdirContent))
 		}
 
 		origZw := a.zw
@@ -220,32 +226,6 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 		a.options.method = origMethod
 		a.options.solid = origSolid
 
-		if err != nil {
-			return err
-		}
-
-		fi, err := tempFile.Stat()
-		if err != nil {
-			return err
-		}
-
-		hdr := &FileHeader{
-			Name:               "solid.zip",
-			Method:             a.options.method,
-			UncompressedSize64: uint64(fi.Size()),
-		}
-		hdr.SetMode(0644)
-
-		tempFile.Seek(0, io.SeekStart)
-
-		a.m.Lock()
-		w, err := a.zw.CreateHeader(hdr)
-		a.m.Unlock()
-		if err != nil {
-			return err
-		}
-
-		_, err = io.Copy(w, tempFile)
 		incOnSuccess(&a.entries, err)
 		return err
 	}
