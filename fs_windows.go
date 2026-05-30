@@ -32,13 +32,14 @@ func lchown(name string, uid, gid int) error {
 }
 
 var (
-	modadvapi32          = syscall.NewLazyDLL("advapi32.dll")
-	procGetFileSecurityW = modadvapi32.NewProc("GetFileSecurityW")
-	procSetFileSecurityW = modadvapi32.NewProc("SetFileSecurityW")
-	modkernel32          = syscall.NewLazyDLL("kernel32.dll")
-	procFindFirstStreamW = modkernel32.NewProc("FindFirstStreamW")
-	procFindNextStreamW  = modkernel32.NewProc("FindNextStreamW")
-	procFindClose        = modkernel32.NewProc("FindClose")
+	modadvapi32                    = syscall.NewLazyDLL("advapi32.dll")
+	procGetFileSecurityW           = modadvapi32.NewProc("GetFileSecurityW")
+	procSetFileSecurityW           = modadvapi32.NewProc("SetFileSecurityW")
+	modkernel32                    = syscall.NewLazyDLL("kernel32.dll")
+	procFindFirstStreamW           = modkernel32.NewProc("FindFirstStreamW")
+	procFindNextStreamW            = modkernel32.NewProc("FindNextStreamW")
+	procFindClose                  = modkernel32.NewProc("FindClose")
+	procSetFileInformationByHandle = modkernel32.NewProc("SetFileInformationByHandle")
 )
 
 type win32FindStreamData struct {
@@ -149,5 +150,15 @@ func preallocate(f *os.File, size int64) error {
 	if size <= 0 {
 		return nil
 	}
-	return f.Truncate(size) // On Windows, Truncate physically extends the file and allocates space
+	// 1. Set physical allocation size on disk (reserves contiguous clusters on NTFS to prevent fragmentation)
+	var allocInfo int64 = size
+	procSetFileInformationByHandle.Call(
+		f.Fd(),
+		5, // FileAllocationInfo
+		uintptr(unsafe.Pointer(&allocInfo)),
+		8, // sizeof(int64)
+	)
+
+	// 2. Set logical end-of-file (EOF)
+	return f.Truncate(size)
 }
