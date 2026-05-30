@@ -276,6 +276,11 @@ func newExtractor(r *Reader, c io.Closer, chroot string, opts []ExtractorOption)
 	e.options.concurrency = runtime.GOMAXPROCS(0)
 	e.options.maxFileSize = 1024 * 1024 * 1024 // 1GB default
 	e.options.maxDecompressionRatio = 200      // 200:1 default
+	e.options.xattrs = true
+	e.options.chownErrorHandler = func(name string, err error) error {
+		fmt.Fprintf(os.Stderr, "zip: %s: %v (continuing)\n", name, err)
+		return nil
+	}
 
 	for _, o := range opts {
 		if err := o(&e.options); err != nil {

@@ -82,8 +82,8 @@ const (
 )
 // ConfigIncludePlatformMetadata defines if FileInfoHeader should automatically
 // include OS-specific metadata (like UID/GID on Unix).
-// Disabled by default to ensure archive portability.
-var ConfigIncludePlatformMetadata = false
+// Enabled by default to match system archivers behavior.
+var ConfigIncludePlatformMetadata = true
 
 // FileHeader describes a file within a ZIP file.
 type FileHeader struct {

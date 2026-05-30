@@ -140,6 +140,8 @@ func NewArchiver(w io.Writer, chroot string, opts ...ArchiverOption) (*Archiver,
 	a.options.concurrency = runtime.GOMAXPROCS(0)
 	a.options.stageDir = chroot
 	a.options.bufferSize = -1
+	a.options.includePlatformMetadata = true
+	a.options.xattrs = true
 
 	for _, o := range opts {
 		if err := o(&a.options); err != nil {
