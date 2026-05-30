@@ -53,13 +53,17 @@ A control file stored within the archive to facilitate "incremental restore" or 
 
 **Behavior:**
 During extraction with "incremental" mode enabled, any file present in the target directory but *NOT* listed in `.zip_dumpdir` SHOULD be deleted.
-### 2.5. Solid Seek Index (Extra Field `0x7812`)
-To allow fast random access (similar to `ratarmount`) inside the highly compressed `solid.zip` stream, the outer entry MAY include a Seek Index extra field.
+### 2.5. Seek Index (Extra Field `0x7812`)
+To allow fast random access (similar to `ratarmount`) inside compressed streams (especially large files or `solid.zip` containers), an entry MAY include a Seek Index extra field.
 
 **Header ID:** `0x7812`
 **Data Layout:**
-- `[ChunkSize]`: 4 bytes (Little Endian, uncompressed block size, e.g., 4MB).
-- `[Offsets...]`: Array of 8-byte (Little Endian) integers representing the absolute byte offset in the compressed stream for the start of each uncompressed chunk.
+- `[ChunkSize]`: 4 bytes (Little Endian, uncompressed block size, e.g., 1MB).
+- `[Offsets...]`: Array of 8-byte (Little Endian) integers representing the **relative byte offset** from the beginning of the compressed data stream (immediately after the local header) to the start of each uncompressed chunk.
+
+**Implementation Details:**
+- The first offset in the array MUST be `0`.
+- Each subsequent offset points to a synchronization point in the compression stream where the decompressor state has been flushed (e.g., using `Z_FULL_FLUSH` in Deflate or similar mechanisms).
 
 **Methodological Recommendations:**
 - When extracting a single file from `solid.zip`, the extractor reads the inner Central Directory (located near the end of the uncompressed archive), finds the uncompressed offset of the target file, divides it by `ChunkSize` to find the block index, and uses `Offsets[block_index]` to jump directly to the required compressed block.
