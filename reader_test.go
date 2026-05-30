@@ -3,9 +3,10 @@ package zip
 import (
 	"bytes"
 	"encoding/binary"
-	"io"
-	"os"
 	"errors"
+	"io"
+	"io/fs"
+	"os"
 	"testing"
 )
 
@@ -192,6 +193,7 @@ func TestFile_OpenNilSafety(t *testing.T) {
 		t.Errorf("expected ErrInvalid for nil file, got %v", err)
 	}
 }
+
 func TestReader_Zip64DataDescriptor(t *testing.T) {
 	// Simulate ZIP64 Data Descriptor with signature
 	// [Sig 4b] [CRC 4b] [Comp 8b] [Uncomp 8b] = 24 bytes
@@ -222,6 +224,7 @@ func TestReader_Zip64DataDescriptor(t *testing.T) {
 		t.Errorf("failed to read ZIP64 data descriptor without signature: %v", err)
 	}
 }
+
 func TestReader_NTFSTimestamps(t *testing.T) {
 	// Prepare NTFS Extra Field (0x000a)
 	// [Tag 2b] [Size 2b] [Reserved 4b] [AttrTag 2b] [AttrSize 2b] [M/A/C 24b]
@@ -307,4 +310,57 @@ func TestConfig_IncludePlatformMetadata(t *testing.T) {
 	// On Unix it should be pulled, on Windows no, but we check the call logic.
 	// If we are on Unix, OwnerSet should become true.
 	_ = fh2
+}
+
+func TestZip_ReadDirIncremental(t *testing.T) {
+	buf := new(bytes.Buffer)
+	zw := NewWriter(buf)
+
+	files := []string{"dir/a.txt", "dir/b.txt", "dir/c.txt", "dir/d.txt"}
+	for _, name := range files {
+		fh := &FileHeader{Name: name, Method: Store}
+		w, _ := zw.CreateHeader(fh)
+		w.Write([]byte("data"))
+	}
+	zw.Close()
+
+	zr, err := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dFile, err := zr.Open("dir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dFile.Close()
+
+	rdf, ok := dFile.(fs.ReadDirFile)
+	if !ok {
+		t.Fatal("Directory file does not implement fs.ReadDirFile")
+	}
+
+	// Считываем первые 2 элемента
+	entries, err := rdf.ReadDir(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Errorf("Expected 2 entries, got %d", len(entries))
+	}
+
+	// Запрашиваем 3 элемента (но осталось всего 2)
+	entries2, err := rdf.ReadDir(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries2) != 2 {
+		t.Errorf("Expected remaining 2 entries, got %d", len(entries2))
+	}
+
+	// Дальнейший запрос должен возвращать io.EOF
+	_, err = rdf.ReadDir(1)
+	if err != io.EOF {
+		t.Errorf("Expected io.EOF, got %v", err)
+	}
 }
