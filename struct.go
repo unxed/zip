@@ -54,14 +54,24 @@ const (
 	zip64ExtraID          = 0x0001 // Zip64 extended information
 	ntfsExtraID           = 0x000a // NTFS
 	unixExtraID           = 0x000d // UNIX
+	ntfsAclExtraID        = 0x4453 // Windows NT Security Descriptor (ACL)
 	extTimeExtraID        = 0x5455 // Extended timestamp
 	infoZipUnixExtraID    = 0x5855 // Info-ZIP Unix extension
-	unicodePathExtraID    = 0x7075 // Info-ZIP Unicode Path Extra Field
 	unicodeCommentExtraID = 0x6375 // Info-ZIP Unicode Comment Extra Field
+	unicodePathExtraID    = 0x7075 // Info-ZIP Unicode Path Extra Field
+	//                      0x756e // ASi UNIX
+	//                             // 0x756f..0x7810 unused
+	xattrExtraID          = 0x7811 // f4 extensions: Xattrs
+	//                      0x7812 // Reserved for further f4 extensions versions
+	//                      0x7813 // Reserved for further f4 extensions versions
+	//                      0x7814 // Reserved for further f4 extensions versions
+	//                      0x7815 // Reserved for further f4 extensions versions
+	//                      0x7816 // Reserved for further f4 extensions versions
+	unixOwnerNameExtraID  = 0x7817 // f4 extensions: Unix owner/group string names
+	//                             // 0x7818..0x7854 unused
+	//                      0x7855 // Info-ZIP UNIX (new)
+	//                      0x7875 // Info-ZIP UNIX (newer UID/GID)
 	winzipAesExtraID      = 0x9901 // WinZip AES encryption extra field
-	ntfsAclExtraID        = 0x4453 // Windows NT Security Descriptor (ACL)
-	xattrExtraID          = 0x7811 // Custom: Xattrs
-	unixOwnerNameExtraID  = 0x787a // Custom: Unix owner/group string names
 )
 
 // Abstraction hooks for NTFS security and stream operations to support unit testing on non-Windows platforms.
@@ -302,7 +312,7 @@ func (fh *FileHeader) injectAutoExtras() uint16 {
 		fh.Extra = appendNtfsAcl(fh.Extra, fh.Acl)
 	}
 
-	// 3.4 Unix Owner/Group Strings (0x787a)
+	// 3.4 Unix Owner/Group Strings (0x7817)
 	if (fh.Uname != "" || fh.Gname != "") && !hasTag(unixOwnerNameExtraID) {
 		fh.Extra = appendUnixOwnerNamesExtra(fh.Extra, fh.Uname, fh.Gname)
 	}

@@ -21,10 +21,10 @@ Encodes POSIX Extended Attributes (xattrs) as a series of key-value pairs.
 - **Filtering:** Implementers SHOULD filter out platform-specific transient attributes (e.g., `com.apple.metadata:*` on macOS if not required) to avoid bloating.
 - **Security:** When extracting, be cautious with `security.*` or `system.*` namespaces. Only restore them if the process has sufficient privileges and the user explicitly requests it.
 
-### 2.2. Unix Owner Names (Extra Field `0x787a`)
+### 2.2. Unix Owner Names (Extra Field `0x7817`)
 Stores user and group names as UTF-8 strings. This complements the numeric UID/GID (`0x7875`), providing portability across systems where numeric IDs for the same user name differ.
 
-**Header ID:** `0x787a`
+**Header ID:** `0x7817`
 **Data Layout:**
 - `[UnameLength]`: 2 bytes (Little Endian)
 - `[Uname]`: `UnameLength` bytes (UTF-8)
