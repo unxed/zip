@@ -197,6 +197,7 @@ func TestExtractor_SymlinkSecurityDeep(t *testing.T) {
 		t.Log("Symlink created pointing to /etc/passwd. Ensure your application handles link targets safely.")
 	}
 }
+
 func TestExtractor_SymlinkDirectoryTraversal(t *testing.T) {
 	tmp := t.TempDir()
 	zipPath := filepath.Join(tmp, "traversal.zip")
@@ -234,3 +235,109 @@ func TestExtractor_SymlinkDirectoryTraversal(t *testing.T) {
 	// Should be an error or simply a safe skip
 	_ = err
 }
+
+func TestExtractor_LinksToDirs(t *testing.T) {
+	tmp := t.TempDir()
+	zipPath := filepath.Join(tmp, "links_to_dirs.zip")
+	dstDir := filepath.Join(tmp, "extract")
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	w, _ := zw.Create("sub/file.txt")
+	w.Write([]byte("file-data"))
+	zw.Close()
+	f.Close()
+
+	trap := filepath.Join(tmp, "trap")
+	os.Mkdir(trap, 0755)
+	os.Mkdir(dstDir, 0755)
+	os.Symlink(trap, filepath.Join(dstDir, "sub"))
+
+	e, _ := NewExtractor(zipPath, dstDir)
+	err := e.Extract(context.Background())
+	if err != nil {
+		t.Fatalf("Extraction failed: %v", err)
+	}
+	e.Close()
+
+	fi, err := os.Lstat(filepath.Join(dstDir, "sub"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		t.Error("expected symlink 'sub' to be deleted and replaced with a physical directory")
+	}
+
+	if _, err := os.Stat(filepath.Join(trap, "file.txt")); err == nil {
+		t.Error("Security violation! File extracted through symlink")
+	}
+}
+
+func TestExtractor_SanitizeMOTW(t *testing.T) {
+	tmp := t.TempDir()
+	zipPath := filepath.Join(tmp, "motw.zip")
+	dstDir := filepath.Join(tmp, "extract")
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	w, _ := zw.Create("test.txt:Zone.Identifier")
+	w.Write([]byte("[ZoneTransfer]\r\nZoneId=3\r\nReferrerUrl=http://evil.com/leak\r\nHostUrl=http://evil.com/file\r\n"))
+	zw.Close()
+	f.Close()
+
+	e, _ := NewExtractor(zipPath, dstDir)
+	e.Extract(context.Background())
+	e.Close()
+
+	data, err := os.ReadFile(filepath.Join(dstDir, "test.txt:Zone.Identifier"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := "[ZoneTransfer]\r\nZoneId=3\r\n"
+	if string(data) != expected {
+		t.Errorf("expected sanitized MOTW %q, got %q", expected, string(data))
+	}
+}
+func TestExtractor_KeepBroken(t *testing.T) {
+	tmp := t.TempDir()
+	zipPath := filepath.Join(tmp, "broken.zip")
+	dstDir := filepath.Join(tmp, "extract")
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	w, _ := zw.Create("file.txt")
+	w.Write([]byte("some substantial data to corrupt"))
+	zw.Close()
+	f.Close()
+
+	// Corrupt the zip to force a CRC or read error during extraction
+	raw, _ := os.ReadFile(zipPath)
+	for i := 30; i < 40 && i < len(raw); i++ {
+		raw[i] = 0x00
+	}
+	os.WriteFile(zipPath, raw, 0644)
+
+	// 1. Extraction without KeepBroken (default): file should be cleaned up (deleted)
+	e, _ := NewExtractor(zipPath, dstDir)
+	err := e.Extract(context.Background())
+	e.Close()
+	if err == nil {
+		t.Error("expected extraction to fail due to corruption")
+	}
+	if _, serr := os.Stat(filepath.Join(dstDir, "file.txt")); serr == nil {
+		t.Error("expected corrupted file to be deleted by default")
+	}
+
+	// 2. Extraction with KeepBroken: file should be preserved
+	os.RemoveAll(dstDir)
+	e2, _ := NewExtractor(zipPath, dstDir, WithExtractorKeepBroken(true))
+	err2 := e2.Extract(context.Background())
+	e2.Close()
+	if err2 == nil {
+		t.Error("expected extraction to fail")
+	}
+	if _, serr := os.Stat(filepath.Join(dstDir, "file.txt")); serr != nil {
+		t.Error("expected corrupted file to be preserved when KeepBroken is enabled")
+	}
+}
+

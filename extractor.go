@@ -30,12 +30,19 @@ type extractorOptions struct {
 	maxFileSize           int64
 	maxDecompressionRatio int64
 	xattrs                bool
+	keepBroken            bool
 }
 
 // WithExtractorXattrs enables restoration of extended attributes (xattrs, POSIX ACLs, SELinux).
 func WithExtractorXattrs(b bool) ExtractorOption {
 	return func(o *extractorOptions) error {
 		o.xattrs = b
+		return nil
+	}
+}
+func WithExtractorKeepBroken(b bool) ExtractorOption {
+	return func(o *extractorOptions) error {
+		o.keepBroken = b
 		return nil
 	}
 }
@@ -152,6 +159,10 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 
 		if !strings.HasPrefix(path, e.chroot+string(filepath.Separator)) && path != e.chroot {
 			return fmt.Errorf("%s cannot be extracted outside of chroot (%s)", path, e.chroot)
+		}
+
+		if err := e.linksToDirs(path); err != nil {
+			return err
 		}
 
 		if err := os.MkdirAll(filepath.Dir(path), 0777); err != nil {
@@ -302,7 +313,33 @@ func (e *Extractor) createFile(ctx context.Context, path string, file *File) (er
 	if err != nil {
 		return err
 	}
-	defer dclose(f, &err)
+
+	cleanup := true
+	defer func() {
+		dclose(f, &err)
+		if err != nil && cleanup && !e.options.keepBroken {
+			os.Remove(path)
+		}
+	}()
+
+	if err := preallocate(f, int64(file.UncompressedSize64)); err != nil {
+		return err
+	}
+
+	if strings.HasSuffix(file.Name, ":Zone.Identifier") {
+		data, err := io.ReadAll(r)
+		if err != nil {
+			return err
+		}
+		sanitized := sanitizeZoneIdentifier(data)
+		_, err = f.Write(sanitized)
+		if err == nil {
+			f.Truncate(int64(len(sanitized)))
+			atomic.AddInt64(&e.written, int64(len(sanitized)))
+		}
+		incOnSuccess(&e.entries, err)
+		return err
+	}
 
 	bw := bufioWriterPool.Get().(*bufio.Writer)
 	defer bufioWriterPool.Put(bw)
@@ -328,6 +365,9 @@ func (e *Extractor) createFile(ctx context.Context, path string, file *File) (er
 	}
 
 	err = bw.Flush()
+	if err == nil {
+		cleanup = false
+	}
 	incOnSuccess(&e.entries, err)
 
 	return err
@@ -371,4 +411,36 @@ func (e *Extractor) updateFileMetadata(path string, file *File) error {
 	e.m.Lock()
 	defer e.m.Unlock()
 	return e.options.chownErrorHandler(file.Name, err)
+}
+
+func (e *Extractor) linksToDirs(targetPath string) error {
+	if !strings.HasPrefix(targetPath, e.chroot) {
+		return nil
+	}
+	rel, err := filepath.Rel(e.chroot, targetPath)
+	if err != nil {
+		return err
+	}
+	if rel == "." || rel == "" {
+		return nil
+	}
+
+	parts := strings.Split(filepath.Clean(rel), string(filepath.Separator))
+	current := e.chroot
+	for i := 0; i < len(parts)-1; i++ {
+		current = filepath.Join(current, parts[i])
+		fi, err := os.Lstat(current)
+		if err != nil {
+			if os.IsNotExist(err) {
+				break
+			}
+			return err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			if err := os.Remove(current); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

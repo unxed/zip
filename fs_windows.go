@@ -145,3 +145,9 @@ func getAlternativeDataStreams(path string) ([]string, error) {
 func appendPlatformExtra(fi os.FileInfo, hdr *FileHeader, force bool) {
 	// Not applicable on Windows for standard ZIP UID/GID fields
 }
+func preallocate(f *os.File, size int64) error {
+	if size <= 0 {
+		return nil
+	}
+	return f.Truncate(size) // On Windows, Truncate physically extends the file and allocates space
+}
