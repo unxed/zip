@@ -57,6 +57,5 @@ A control file stored within the archive to facilitate "incremental restore" or 
 During extraction with "incremental" mode enabled, any file present in the target directory but *NOT* listed in `.zip_dumpdir` SHOULD be deleted.
 
 ## 3. Guidelines for Archiver Developers
-1. **Graceful Degradation:** All extensions use the standard ZIP "Extra Field" mechanism. Unknown IDs MUST be ignored by other tools.
-2. **Path Normalization:** Always use `/` as the path separator in `0x7878` keys and filenames, regardless of the host OS.
-3. **Atomicity:** When applying complex metadata like ACLs (`0x4453`) or Xattrs (`0x7878`), apply them *after* the file content has been successfully written and closed.
+1. **Path Normalization:** Always use `/` as the path separator in `0x7878` keys and filenames, regardless of the host OS.
+2. **Atomicity:** When applying complex metadata like ACLs (`0x4453`) or Xattrs (`0x7878`), apply them *after* the file content has been successfully written and closed.
