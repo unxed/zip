@@ -61,7 +61,7 @@ func OpenReader(name string) (*ReadCloser, error) {
 	}
 
 	r := new(ReadCloser)
-	if err = r.init(ra, size); err != nil && err != ErrInsecurePath {
+	if err = r.init(ra, size); err != nil {
 		closer.Close()
 		return nil, err
 	}

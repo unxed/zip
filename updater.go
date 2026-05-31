@@ -338,10 +338,11 @@ func (u *Updater) RemoveFile(dirIndex int) (int64, error) {
 	}
 	var size = end - start
 
-	var buffer = make([]byte, bufferSize)
+	const chunkBufSize = 32 * 1024
+	var buffer = make([]byte, chunkBufSize)
 	var rp int64 = end
 	var wp int64 = start
-	for rp < u.dirOffset-bufferSize {
+	for rp < u.dirOffset-chunkBufSize {
 		n, err := u.rw.ReadAt(buffer, rp)
 		if err != nil {
 			return 0, fmt.Errorf("zip: rewind data: ReadAt: %w", err)

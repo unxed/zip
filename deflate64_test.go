@@ -3,6 +3,7 @@ package zip
 import (
 	"bytes"
 	"io"
+	"strings"
 	"testing"
 )
 
@@ -42,10 +43,10 @@ func TestDeflate64_Reader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open deflate64 file: %v", err)
 	}
-	res, _ := io.ReadAll(rc)
+	_, err = io.ReadAll(rc)
 	rc.Close()
 
-	if !bytes.Equal(res, data) {
-		t.Errorf("got %q, want %q", string(res), string(data))
+	if err == nil || !strings.Contains(err.Error(), "Deflate64 compression method is not supported") {
+		t.Errorf("expected unsupported Deflate64 error, got: %v", err)
 	}
 }

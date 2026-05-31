@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"errors"
-	"fmt"
 	"hash"
 	"io"
 
@@ -32,31 +31,22 @@ type aesReader struct {
 }
 
 func (ar *aesReader) Read(p []byte) (int, error) {
-	fmt.Printf("[DEBUG-AES] Read called. ar.err: %v\n", ar.err)
 	if ar.err != nil {
 		return 0, ar.err
 	}
 	n, err := ar.r.Read(p)
-	fmt.Printf("[DEBUG-AES] Inner Read returned n=%d, err=%v\n", n, err)
 	if n > 0 {
 		ar.mac.Write(p[:n])
 		ar.decrypter.XORKeyStream(p[:n], p[:n])
 	}
 	if err == io.EOF {
-		fmt.Printf("[DEBUG-AES] EOF reached. Reading 10-byte MAC...\n")
 		expectedMAC := make([]byte, 10)
 		if _, macErr := io.ReadFull(ar.baseR, expectedMAC); macErr != nil {
-			fmt.Printf("[DEBUG-AES] Error reading MAC: %v\n", macErr)
 			ar.err = macErr
 			return n, macErr
 		}
 		calculatedMAC := ar.mac.Sum(nil)[:10]
-		fmt.Printf("[DEBUG-AES] Expected MAC:   %x\n", expectedMAC)
-		fmt.Printf("[DEBUG-AES] Calculated MAC: %x\n", calculatedMAC)
-		equal := hmac.Equal(calculatedMAC, expectedMAC)
-		fmt.Printf("[DEBUG-AES] HMAC Equal: %v\n", equal)
-		if !equal {
-			fmt.Printf("[DEBUG-AES] HMAC mismatch! Returning ErrChecksum\n")
+		if !hmac.Equal(calculatedMAC, expectedMAC) {
 			ar.err = ErrChecksum
 			return n, ErrChecksum
 		}
@@ -128,6 +118,7 @@ type aesWriter struct {
 	w         io.Writer
 	encrypter cipher.Stream
 	mac       hash.Hash
+	buf       []byte
 }
 
 func newWinZipAesWriter(w io.Writer, password string, strength byte) (io.WriteCloser, error) {
@@ -184,10 +175,14 @@ func (aw *aesWriter) Write(p []byte) (n int, err error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	enc := make([]byte, len(p))
-	aw.encrypter.XORKeyStream(enc, p)
-	aw.mac.Write(enc)
-	return aw.w.Write(enc)
+	if cap(aw.buf) < len(p) {
+		aw.buf = make([]byte, len(p))
+	} else {
+		aw.buf = aw.buf[:len(p)]
+	}
+	aw.encrypter.XORKeyStream(aw.buf, p)
+	aw.mac.Write(aw.buf)
+	return aw.w.Write(aw.buf)
 }
 
 func (aw *aesWriter) Close() error {

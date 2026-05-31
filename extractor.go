@@ -410,7 +410,11 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 				return err
 			}
 
-			if !strings.HasPrefix(path, e.chroot+string(filepath.Separator)) && path != e.chroot {
+			prefix := e.chroot
+			if !strings.HasSuffix(prefix, string(filepath.Separator)) {
+				prefix += string(filepath.Separator)
+			}
+			if !strings.HasPrefix(path, prefix) && path != e.chroot {
 				return fmt.Errorf("%s cannot be extracted outside of chroot (%s)", path, e.chroot)
 			}
 
@@ -625,7 +629,11 @@ func (e *Extractor) extractSolidStream(r io.Reader, ctx context.Context) error {
 			return err
 		}
 
-		if !strings.HasPrefix(path, e.chroot+string(filepath.Separator)) && path != e.chroot {
+		prefix := e.chroot
+		if !strings.HasSuffix(prefix, string(filepath.Separator)) {
+			prefix += string(filepath.Separator)
+		}
+		if !strings.HasPrefix(path, prefix) && path != e.chroot {
 			return fmt.Errorf("%s cannot be extracted outside of chroot (%s)", path, e.chroot)
 		}
 
@@ -788,10 +796,14 @@ func (e *Extractor) createLink(path string, file *File) error {
 			return fmt.Errorf("zip: absolute symlink target not allowed: %s", target)
 		}
 
-		resolvedTarget := filepath.Clean(filepath.Join(filepath.Dir(path), target))
-		if !strings.HasPrefix(resolvedTarget, e.chroot) && resolvedTarget != e.chroot {
-			return fmt.Errorf("zip: symlink target escapes chroot: %s", target)
-		}
+			resolvedTarget := filepath.Clean(filepath.Join(filepath.Dir(path), target))
+			prefix := e.chroot
+			if !strings.HasSuffix(prefix, string(filepath.Separator)) {
+				prefix += string(filepath.Separator)
+			}
+			if !strings.HasPrefix(resolvedTarget, prefix) && resolvedTarget != e.chroot {
+				return fmt.Errorf("zip: symlink target escapes chroot: %s", target)
+			}
 
 		if err := os.Symlink(target, path); err != nil {
 			return err
@@ -845,6 +857,11 @@ func (e *Extractor) createFile(ctx context.Context, path string, file *File) (er
 
 	cleanup := true
 	defer func() {
+		if err == nil {
+			if currentOffset, serr := f.Seek(0, io.SeekCurrent); serr == nil {
+				f.Truncate(currentOffset)
+			}
+		}
 		dclose(f, &err)
 		if err != nil && cleanup && !e.options.keepBroken {
 			os.Remove(writePath)
