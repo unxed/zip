@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"errors"
+	"fmt"
 	"hash"
 	"io"
 
@@ -22,6 +23,7 @@ type winzipAesInfo struct {
 
 type aesReader struct {
 	r          io.Reader
+	baseR      io.Reader
 	decrypter  cipher.Stream
 	mac        hash.Hash
 	authCode   []byte
@@ -30,18 +32,35 @@ type aesReader struct {
 }
 
 func (ar *aesReader) Read(p []byte) (int, error) {
+	fmt.Printf("[DEBUG-AES] Read called. ar.err: %v\n", ar.err)
 	if ar.err != nil {
 		return 0, ar.err
 	}
 	n, err := ar.r.Read(p)
+	fmt.Printf("[DEBUG-AES] Inner Read returned n=%d, err=%v\n", n, err)
 	if n > 0 {
-		ar.decrypter.XORKeyStream(p[:n], p[:n])
 		ar.mac.Write(p[:n])
+		ar.decrypter.XORKeyStream(p[:n], p[:n])
 	}
 	if err == io.EOF {
-		// HMAC check at the end of the file (in ZIP, these are the last 10 bytes of the stream)
-		// At this level of abstraction, we only decode,
-		// since it's better to perform HMAC verification in a separate wrapper reader.
+		fmt.Printf("[DEBUG-AES] EOF reached. Reading 10-byte MAC...\n")
+		expectedMAC := make([]byte, 10)
+		if _, macErr := io.ReadFull(ar.baseR, expectedMAC); macErr != nil {
+			fmt.Printf("[DEBUG-AES] Error reading MAC: %v\n", macErr)
+			ar.err = macErr
+			return n, macErr
+		}
+		calculatedMAC := ar.mac.Sum(nil)[:10]
+		fmt.Printf("[DEBUG-AES] Expected MAC:   %x\n", expectedMAC)
+		fmt.Printf("[DEBUG-AES] Calculated MAC: %x\n", calculatedMAC)
+		equal := hmac.Equal(calculatedMAC, expectedMAC)
+		fmt.Printf("[DEBUG-AES] HMAC Equal: %v\n", equal)
+		if !equal {
+			fmt.Printf("[DEBUG-AES] HMAC mismatch! Returning ErrChecksum\n")
+			ar.err = ErrChecksum
+			return n, ErrChecksum
+		}
+		ar.err = io.EOF
 	}
 	return n, err
 }
@@ -99,6 +118,7 @@ func newWinZipAesReader(r io.Reader, password string, info *winzipAesInfo, compr
 
 	return &aesReader{
 		r:         limitedR,
+		baseR:     r,
 		decrypter: decrypter,
 		mac:       hmac.New(sha1.New, authKey),
 	}, info.actualMethod, nil

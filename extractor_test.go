@@ -193,12 +193,28 @@ func TestExtractor_SymlinkSecurityDeep(t *testing.T) {
 	e, _ := NewExtractor(zipPath, dstDir)
 	err := e.Extract(context.Background())
 
-	// Verify that the link is created, but we shouldn't allow it
-	// to act as an attack vector if the library declares this.
-	// At this stage extractor.go does os.Symlink(target, path).
-	// This will create a link at dstDir/attack_link -> /etc/passwd.
-	if err == nil {
-		t.Log("Symlink created pointing to /etc/passwd. Ensure your application handles link targets safely.")
+	// The extractor must reject absolute symlinks
+	if err == nil || !strings.Contains(err.Error(), "absolute symlink target not allowed") {
+		t.Errorf("Security Breach! Expected error rejecting absolute symlink, got: %v", err)
+	}
+
+	// Clean up and test relative escape
+	os.RemoveAll(dstDir)
+	os.Remove(zipPath)
+
+	f2, _ := os.Create(zipPath)
+	zw2 := NewWriter(f2)
+	fh2 := &FileHeader{Name: "sub/attack_link"}
+	fh2.SetMode(os.ModeSymlink)
+	w2, _ := zw2.CreateHeader(fh2)
+	w2.Write([]byte("../../etc/passwd"))
+	zw2.Close()
+	f2.Close()
+
+	e2, _ := NewExtractor(zipPath, dstDir)
+	err2 := e2.Extract(context.Background())
+	if err2 == nil || !strings.Contains(err2.Error(), "escapes chroot") {
+		t.Errorf("Security Breach! Expected error rejecting relative escape symlink, got: %v", err2)
 	}
 }
 
@@ -685,6 +701,7 @@ func TestSolidFallback_Zip(t *testing.T) {
 	f.Close()
 
 	// Extract. Streaming extraction should fail, automatically triggering two-pass fallback mode.
+	os.MkdirAll(dstDir, 0755)
 	e, err := NewExtractor(zipPath, dstDir)
 	if err != nil {
 		t.Fatal(err)

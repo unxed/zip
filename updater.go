@@ -131,6 +131,9 @@ func (u *Updater) init(size int64) error {
 	if err != nil {
 		return err
 	}
+	if end.encrypted {
+		return errors.New("zip: updating archives with encrypted central directory is not supported")
+	}
 	u.baseOffset = baseOffset
 	u.dirOffset = int64(end.directoryOffset)
 	if end.directorySize < uint64(size) && (uint64(size)-end.directorySize)/30 >= end.directoryRecords {

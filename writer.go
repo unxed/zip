@@ -98,10 +98,15 @@ func (c *chunkSeekWriter) Write(p []byte) (n int, err error) {
 				if f, ok := c.comp.(flusher); ok {
 					f.Flush()
 				}
+				// Clear the dictionary to make the next chunk completely independent
+				if r, ok := c.comp.(interface{ ResetDict() }); ok {
+					r.ResetDict()
+				}
 				// Record relative offset from the start of compressed data
 				relativeOffset := c.base.count - c.dataStart
 				c.h.SeekIndex = append(c.h.SeekIndex, uint64(relativeOffset))
 			}
+
 			c.written = 0
 		}
 	}
@@ -295,7 +300,8 @@ func detectUTF8(s string) (valid, require bool) {
 	for i := 0; i < len(s); {
 		r, size := utf8.DecodeRuneInString(s[i:])
 		i += size
-		if r < 0x20 || r > 0x7d || r == 0x5c {
+		// 0x7e is '~', the last printable ASCII character before DEL (0x7f)
+		if r < 0x20 || r > 0x7e || r == 0x5c {
 			if !utf8.ValidRune(r) || (r == utf8.RuneError && size == 1) {
 				return false, false
 			}

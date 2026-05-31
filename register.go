@@ -1,6 +1,7 @@
 package zip
 
 import (
+    "fmt"
 	"errors"
 	"io"
 	"sync"
@@ -19,6 +20,12 @@ type Decompressor func(r io.Reader) io.ReadCloser
 
 var flateWriterPool sync.Pool
 
+type pooledFlateWriter struct {
+	mu sync.Mutex
+	fw *flate.Writer
+	w  io.Writer
+}
+
 func newFlateWriter(w io.Writer) io.WriteCloser {
 	fw, ok := flateWriterPool.Get().(*flate.Writer)
 	if ok {
@@ -26,12 +33,7 @@ func newFlateWriter(w io.Writer) io.WriteCloser {
 	} else {
 		fw, _ = flate.NewWriter(w, 5) // klauspost default
 	}
-	return &pooledFlateWriter{fw: fw}
-}
-
-type pooledFlateWriter struct {
-	mu sync.Mutex
-	fw *flate.Writer
+	return &pooledFlateWriter{fw: fw, w: w}
 }
 
 func (w *pooledFlateWriter) Write(p []byte) (n int, err error) {
@@ -50,6 +52,13 @@ func (w *pooledFlateWriter) Flush() error {
 		return errors.New("Flush after Close")
 	}
 	return w.fw.Flush()
+}
+func (w *pooledFlateWriter) ResetDict() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.fw != nil && w.w != nil {
+		w.fw.ResetDict(w.w, nil)
+	}
 }
 
 func (w *pooledFlateWriter) Close() error {
@@ -218,6 +227,11 @@ func init() {
 	decompressors.Store(ZSTD, Decompressor(newZstdReader))
 }
 
+const maxDictSize = 128 << 20 // 128 MB max memory for decompilers to prevent RAM bomb DoS
+
+type errorReader struct{ err error }
+func (e errorReader) Read(p []byte) (int, error) { return 0, e.err }
+func (e errorReader) Close() error               { return nil }
 func newPPMdReader(r io.Reader, size uint64) io.ReadCloser {
 	// APPNOTE 5.10.3: PPMd parameters are stored in the first 2 bytes of the data.
 	props := make([]byte, 2)
@@ -233,9 +247,13 @@ func newPPMdReader(r io.Reader, size uint64) io.ReadCloser {
 	order := int(val&0xF) + 1
 	memSize := (int((val>>4)&0xFF) + 1)
 
+	if memSize > maxDictSize/(1024*1024) {
+		return errorReader{fmt.Errorf("zip: PPMd memory limit exceeded (%d MB)", memSize)}
+	}
+
 	rd, err := ppmd.NewH7zReader(r, order, memSize, int(size))
 	if err != nil {
-		return nil
+		return errorReader{err}
 	}
 	return io.NopCloser(&rd)
 }
@@ -261,10 +279,16 @@ func newLZMAReader(r io.Reader) io.ReadCloser {
 		return nil
 	}
 
+	dictSize := binary.LittleEndian.Uint32(props[1:5])
+	if dictSize > maxDictSize {
+		return errorReader{fmt.Errorf("zip: LZMA dictionary limit exceeded (%d bytes)", dictSize)}
+	}
+
 	// The ulikunitz/xz/lzma library expects a classic .lzma header (13 bytes):
 	// [1b props][4b dict size][8b uncompressed size]
 	fullHeader := make([]byte, 13)
 	copy(fullHeader[0:5], props)
+
 	for i := 0; i < 8; i++ {
 		// Set to 0xFF, meaning "size unknown, read until EOS marker"
 		fullHeader[5+i] = 0xFF

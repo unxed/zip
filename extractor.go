@@ -315,9 +315,19 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 
 		err = e.extractSolidStream(r, ctx)
 		if err != nil {
-			tempFile, terr := os.CreateTemp("", "solid_fallback_*.zip")
+			maxFallback := int64(e.options.maxFileSize) * 10
+			if maxFallback <= 0 {
+				maxFallback = 100 * 1024 * 1024 * 1024 // 100 GB default limit
+			}
+			if int64(e.zr.File[0].UncompressedSize64) > maxFallback {
+				return fmt.Errorf("zip: Solid archive too large for temp file fallback (%d bytes)", e.zr.File[0].UncompressedSize64)
+			}
+
+			// Use chroot instead of /tmp to ensure enough space and security
+			os.MkdirAll(e.chroot, 0755)
+			tempFile, terr := os.CreateTemp(e.chroot, "solid_fallback_*.zip")
 			if terr != nil {
-				return err
+				return fmt.Errorf("fallback failed: %v, original: %v", terr, err)
 			}
 			defer os.Remove(tempFile.Name())
 			defer tempFile.Close()
@@ -403,7 +413,7 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 			// Overwrite control policies
 			if file.Mode()&os.ModeDir == 0 && file.Mode()&os.ModeSymlink == 0 && file.Linkname == "" {
 				if e.options.unlinkFirst {
-					os.Remove(path) // Unconditionally remove before extraction
+					os.RemoveAll(path) // Safer than os.Remove for preventing TOCTOU directory overwrites
 				}
 				if e.options.keepOldFiles {
 					if _, err := os.Stat(path); err == nil {
@@ -752,7 +762,18 @@ func (e *Extractor) createLink(path string, file *File) error {
 		if err != nil {
 			return err
 		}
-		if err := os.Symlink(string(name), path); err != nil {
+
+		target := string(name)
+		if filepath.IsAbs(target) {
+			return fmt.Errorf("zip: absolute symlink target not allowed: %s", target)
+		}
+
+		resolvedTarget := filepath.Clean(filepath.Join(filepath.Dir(path), target))
+		if !strings.HasPrefix(resolvedTarget, e.chroot) && resolvedTarget != e.chroot {
+			return fmt.Errorf("zip: symlink target escapes chroot: %s", target)
+		}
+
+		if err := os.Symlink(target, path); err != nil {
 			return err
 		}
 	} else if file.Linkname != "" {

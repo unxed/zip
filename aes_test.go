@@ -1,6 +1,7 @@
 package zip
 
 import (
+    "crypto/hmac"
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
@@ -38,7 +39,11 @@ func TestWinZipAES_Reader(t *testing.T) {
 	payload.Write(salt)
 	payload.Write(pwVerif)
 	payload.Write(cipherText)
-	payload.Write(make([]byte, 10)) // HMAC dummy
+
+	authKey := keys[keyLen : 2*keyLen]
+	mac := hmac.New(sha1.New, authKey)
+	mac.Write(cipherText)
+	payload.Write(mac.Sum(nil)[:10])
 
 	// 4. Test our aesReader
 	info := &winzipAesInfo{
@@ -153,5 +158,49 @@ func TestWinZipAES_StrengthsAndStore(t *testing.T) {
 				t.Errorf("got %q, want %q", string(decrypted), string(data))
 			}
 		})
+	}
+}
+func TestWinZipAES_CorruptedMAC(t *testing.T) {
+	password := "secure-password"
+	data := []byte("this data will be corrupted")
+	buf := new(bytes.Buffer)
+
+	zw := NewWriter(buf)
+	fh := &FileHeader{
+		Name:        "corrupted.txt",
+		Method:      Deflate,
+		Password:    password,
+		AESStrength: 3,
+	}
+	w, _ := zw.CreateHeader(fh)
+	w.Write(data)
+	zw.Close()
+
+	raw := buf.Bytes()
+	t.Logf("[DEBUG-TEST] Raw zip size: %d", len(raw))
+	zr, _ := NewReader(bytes.NewReader(raw), int64(len(raw)))
+
+	off, _ := zr.File[0].DataOffset()
+	compSize := zr.File[0].CompressedSize64
+	macOffset := off + int64(compSize) - 5
+	t.Logf("[DEBUG-TEST] DataOffset: %d, CompressedSize64: %d, macOffset: %d", off, compSize, macOffset)
+	t.Logf("[DEBUG-TEST] Bytes before corruption: %x", raw[macOffset-5:macOffset+5])
+	raw[macOffset] ^= 0xFF
+	t.Logf("[DEBUG-TEST] Bytes after corruption:  %x", raw[macOffset-5:macOffset+5])
+
+	zr2, _ := NewReader(bytes.NewReader(raw), int64(len(raw)))
+	zr2.SetPassword(password)
+
+	f := zr2.File[0]
+	rc, err := f.Open()
+	if err != nil {
+		t.Fatalf("f.Open failed: %v", err)
+	}
+	defer rc.Close()
+
+	decrypted, err := io.ReadAll(rc)
+	t.Logf("[DEBUG-TEST] ReadAll returned error: %v, decrypted len: %d", err, len(decrypted))
+	if err != ErrChecksum {
+		t.Fatalf("Expected ErrChecksum due to corrupted MAC, got: %v", err)
 	}
 }

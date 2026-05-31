@@ -66,8 +66,18 @@ func (m *multiVolumeReader) Close() error {
 
 // openMultiVolume looks for archive parts (.z01, .z02...) alongside the .zip file
 func openMultiVolume(mainPath string) (io.ReaderAt, int64, io.Closer, error) {
-	ext := filepath.Ext(mainPath)
-	prefix := strings.TrimSuffix(mainPath, ext)
+	ext := strings.ToLower(filepath.Ext(mainPath))
+	if ext != ".zip" && ext != ".zipx" {
+		// Not a standard main volume extension, open as single file to avoid infinite loops
+		fMain, err := os.Open(mainPath)
+		if err != nil {
+			return nil, 0, nil, err
+		}
+		fiMain, _ := fMain.Stat()
+		return fMain, fiMain.Size(), fMain, nil
+	}
+
+	prefix := mainPath[:len(mainPath)-len(ext)]
 
 	var files []*os.File
 	var offsets []int64

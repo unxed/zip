@@ -136,12 +136,17 @@ func TestZstd_WithDataDescriptor(t *testing.T) {
 	}
 }
 func TestSolidSeekIndex_RandomAccess(t *testing.T) {
-	// Create a repetitive data set to test seeking
+	// Create a repetitive data set with cross-chunk patterns to test ResetDict seeking
 	chunkSize := uint32(1024)
 	numChunks := 5
 	var fullData bytes.Buffer
 	for i := 0; i < numChunks; i++ {
-		block := bytes.Repeat([]byte{byte('A' + i)}, int(chunkSize))
+		// The pattern "ABCDEFGH..." repeats across chunks. Without ResetDict, 
+		// jumping to block 3 will fail because it expects back-references from previous blocks.
+		block := make([]byte, chunkSize)
+		for j := 0; j < int(chunkSize); j++ {
+			block[j] = byte('A' + ((i*int(chunkSize) + j) % 26))
+		}
 		fullData.Write(block)
 	}
 
@@ -178,20 +183,22 @@ func TestSolidSeekIndex_RandomAccess(t *testing.T) {
 		t.Fatalf("failed to open seekable: %v", err)
 	}
 
-	// 1. Seek to block 3 (char 'D')
+	// 1. Seek to block 3 
 	targetOff := int64(chunkSize * 3)
 	rs.Seek(targetOff, io.SeekStart)
 
 	out := make([]byte, 10)
 	io.ReadFull(rs, out)
-	if string(out) != "DDDDDDDDDD" {
+	// For block 3 (start index 3072), 3072 % 26 = 4 ('E')
+	if string(out) != "EFGHIJKLMN" {
 		t.Errorf("seek to block 3 failed, got %q", string(out))
 	}
 
-	// 2. Seek back to block 1 (char 'B')
+	// 2. Seek back to block 1
 	rs.Seek(int64(chunkSize), io.SeekStart)
 	io.ReadFull(rs, out)
-	if string(out) != "BBBBBBBBBB" {
+	// For block 1 (start index 1024), 1024 % 26 = 10 ('K')
+	if string(out) != "KLMNOPQRST" {
 		t.Errorf("seek to block 1 failed, got %q", string(out))
 	}
 

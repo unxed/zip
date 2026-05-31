@@ -317,6 +317,7 @@ func (f *File) Open() (io.ReadCloser, error) {
 	}
 	rc = &checksumReader{
 		rc:   rc,
+		rr:   rr,
 		hash: crc32.NewIEEE(),
 		f:    f,
 		desr: desr,
@@ -456,6 +457,7 @@ func (r *dirReader) Close() error {
 
 type checksumReader struct {
 	rc    io.ReadCloser
+	rr    io.Reader
 	hash  hash.Hash32
 	nread uint64
 	f     *File
@@ -468,10 +470,12 @@ func (r *checksumReader) Stat() (fs.FileInfo, error) {
 }
 
 func (r *checksumReader) Read(b []byte) (n int, err error) {
+	fmt.Printf("[DEBUG-CHECK] Read called. nread: %d, UncompressedSize: %d\n", r.nread, r.f.UncompressedSize64)
 	if r.err != nil {
 		return 0, r.err
 	}
 	n, err = r.rc.Read(b)
+	fmt.Printf("[DEBUG-CHECK] Inner Read returned n: %d, err: %v\n", n, err)
 	r.hash.Write(b[:n])
 	r.nread += uint64(n)
 	if r.nread > r.f.UncompressedSize64 {
@@ -481,12 +485,17 @@ func (r *checksumReader) Read(b []byte) (n int, err error) {
 		return
 	}
 	if err == io.EOF {
+		fmt.Printf("[DEBUG-CHECK] Inner EOF reached.\n")
 		if r.nread != r.f.UncompressedSize64 {
 			return 0, io.ErrUnexpectedEOF
 		}
 		if r.f.Method == winzipAesExtraID {
-			// WinZip AES (AE-2) uses a CRC of 0; checksum is verified via HMAC
-			err = io.EOF
+			fmt.Printf("[DEBUG-CHECK] AE file, verifying HMAC/EOF\n")
+			if _, macErr := io.Copy(io.Discard, r.rr); macErr != nil {
+				err = macErr
+			} else {
+				err = io.EOF
+			}
 		} else if r.desr != nil {
 			if err1 := readDataDescriptor(r.desr, r.f); err1 != nil {
 				if err1 == io.EOF {
@@ -507,7 +516,10 @@ func (r *checksumReader) Read(b []byte) (n int, err error) {
 	return
 }
 
-func (r *checksumReader) Close() error { return r.rc.Close() }
+func (r *checksumReader) Close() error {
+	fmt.Printf("[DEBUG-CHECK] Close called\n")
+	return r.rc.Close()
+}
 
 func (f *File) findBodyOffset() (int64, error) {
 	var buf [fileHeaderLen]byte

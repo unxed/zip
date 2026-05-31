@@ -312,6 +312,26 @@ func TestUpdater_NonZipFile(t *testing.T) {
 		t.Error("expected error when opening non-zip file for update, got nil")
 	}
 }
+func TestUpdater_CDEArchive(t *testing.T) {
+	tmp := t.TempDir()
+	zipPath := filepath.Join(tmp, "cde.zip")
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	zw.SetEncryptCentralDirectory(true, "pass")
+	w, _ := zw.Create("test.txt")
+	w.Write([]byte("data"))
+	zw.Close()
+	f.Close()
+
+	fRW, _ := os.OpenFile(zipPath, os.O_RDWR, 0)
+	defer fRW.Close()
+
+	_, err := NewUpdater(fRW)
+	if err == nil || err.Error() != "zip: updating archives with encrypted central directory is not supported" {
+		t.Errorf("Expected CDE unsupported error, got: %v", err)
+	}
+}
 func TestUpdater_WithPrefixStub(t *testing.T) {
 	tmp := t.TempDir()
 	zipPath := filepath.Join(tmp, "stub.exe")
