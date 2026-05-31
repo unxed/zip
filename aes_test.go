@@ -204,3 +204,47 @@ func TestWinZipAES_CorruptedMAC(t *testing.T) {
 		t.Fatalf("Expected ErrChecksum due to corrupted MAC, got: %v", err)
 	}
 }
+func TestWinZipAES_Writer_BufResizing(t *testing.T) {
+	password := "buf-resize-pass"
+	buf := new(bytes.Buffer)
+
+	zw := NewWriter(buf)
+	fh := &FileHeader{
+		Name:        "resize.txt",
+		Method:      Store,
+		Password:    password,
+		AESStrength: 3,
+	}
+	w, err := zw.CreateHeader(fh)
+	if err != nil {
+		t.Fatalf("CreateHeader failed: %v", err)
+	}
+
+	// Write 1: 5 bytes
+	w.Write([]byte("12345"))
+	// Write 2: 20 bytes (triggers buf resizing)
+	w.Write([]byte("abcde12345abcde12345"))
+	// Write 3: 2 bytes (tests reusing larger buffer)
+	w.Write([]byte("xy"))
+
+	zw.Close()
+
+	// Verify content is fully readable and decrypted correctly
+	zr, _ := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	zr.SetPassword(password)
+	rc, err := zr.File[0].Open()
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer rc.Close()
+
+	content, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("ReadAll failed: %v", err)
+	}
+
+	expected := "12345abcde12345abcde12345xy"
+	if string(content) != expected {
+		t.Errorf("expected %q, got %q", expected, string(content))
+	}
+}

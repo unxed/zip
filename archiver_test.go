@@ -336,6 +336,39 @@ func TestArchiver_InvalidStageDir(t *testing.T) {
 		t.Error("expected error due to invalid stage directory, got nil")
 	}
 }
+func TestArchiver_WrittenStats(t *testing.T) {
+	srcDir := t.TempDir()
+	zipPath := filepath.Join(t.TempDir(), "stats.zip")
+
+	// Create multiple files
+	os.WriteFile(filepath.Join(srcDir, "f1.txt"), []byte("data1"), 0644)
+	os.WriteFile(filepath.Join(srcDir, "f2.txt"), []byte("data22"), 0644)
+
+	filesMap := make(map[string]os.FileInfo)
+	filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
+		if path != srcDir {
+			filesMap[path] = info
+		}
+		return nil
+	})
+
+	f, _ := os.Create(zipPath)
+	archiver, _ := NewArchiver(f, srcDir, WithArchiverSolid(true), WithArchiverMethod(Deflate))
+	if err := archiver.Archive(context.Background(), filesMap); err != nil {
+		t.Fatalf("solid archiving failed: %v", err)
+	}
+	archiver.Close()
+	f.Close()
+
+	bytes, entries := archiver.Written()
+	// 2 entries (f1.txt and f2.txt) + 1 outer Solid.zip entry = 3 entries total
+	if entries != 3 {
+		t.Errorf("expected 3 entries total (2 inner + 1 outer), got %d", entries)
+	}
+	if bytes <= 0 {
+		t.Errorf("expected positive bytes written, got %d", bytes)
+	}
+}
 
 type mockFileInfo struct {
 	name string

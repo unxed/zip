@@ -86,6 +86,51 @@ func TestReadDataDescriptor_Collision(t *testing.T) {
 		t.Errorf("failed on signature present: %v", err)
 	}
 }
+func TestSalvageMode_ZIP64(t *testing.T) {
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "broken_zip64.zip")
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+
+	// Force ZIP64 sizes
+	fh := &FileHeader{
+		Name:               "huge.txt",
+		Method:             Store,
+		UncompressedSize64: uint64(uint32max) + 10,
+		CompressedSize64:   uint64(uint32max) + 10,
+	}
+	w, err := zw.CreateRaw(fh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Write([]byte("zip64 salvage data"))
+	zw.Close()
+	f.Close()
+
+	// Truncate the Central Directory
+	content, _ := os.ReadFile(zipPath)
+	truncatedContent := content[:len(content)-100]
+	os.WriteFile(zipPath, truncatedContent, 0644)
+
+	// Salvage mode should parse the ZIP64 extra field and recover sizes
+	zr, err := OpenReader(zipPath)
+	if err != nil {
+		t.Fatalf("OpenReader failed in salvage mode: %v", err)
+	}
+	defer zr.Close()
+
+	if len(zr.File) != 1 {
+		t.Fatalf("expected 1 file recovered, got %d", len(zr.File))
+	}
+	file := zr.File[0]
+	if file.UncompressedSize64 != uint64(uint32max)+10 {
+		t.Errorf("ZIP64 UncompressedSize64 not recovered: got %d", file.UncompressedSize64)
+	}
+	if file.CompressedSize64 != uint64(uint32max)+10 {
+		t.Errorf("ZIP64 CompressedSize64 not recovered: got %d", file.CompressedSize64)
+	}
+}
 
 func TestReader_TruncatedFile(t *testing.T) {
 	// 1. Completely short file

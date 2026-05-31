@@ -37,3 +37,33 @@ func TestMultiVolumeReader_ReadAt(t *testing.T) {
 		t.Errorf("boundary read failed: got %q", string(buf))
 	}
 }
+
+func TestMultiVolumeReader_Casing(t *testing.T) {
+	tmp := t.TempDir()
+
+	// Create uppercase volumes: .Z01 (5 bytes) and .ZIP (5 bytes)
+	vol1Path := filepath.Join(tmp, "test_case.Z01")
+	zipPath := filepath.Join(tmp, "test_case.ZIP")
+
+	os.WriteFile(vol1Path, []byte("ABCDE"), 0644)
+	os.WriteFile(zipPath, []byte("FGHIJ"), 0644)
+
+	ra, size, closer, err := openMultiVolume(zipPath)
+	if err != nil {
+		t.Fatalf("failed to open multivolume: %v", err)
+	}
+	defer closer.Close()
+
+	if size != 10 {
+		t.Errorf("expected size 10, got %d", size)
+	}
+
+	buf := make([]byte, 10)
+	n, err := ra.ReadAt(buf, 0)
+	if err != nil && err != io.EOF {
+		t.Fatalf("ReadAt error: %v", err)
+	}
+	if n != 10 || string(buf) != "ABCDEFGHIJ" {
+		t.Errorf("casing read failed: got %q", string(buf))
+	}
+}

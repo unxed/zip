@@ -319,6 +319,43 @@ func TestExtractor_SanitizeMOTW(t *testing.T) {
 		t.Errorf("expected sanitized MOTW %q, got %q", expected, string(data))
 	}
 }
+func TestExtractor_SanitizeMOTW_UTF16LE(t *testing.T) {
+	tmp := t.TempDir()
+	zipPath := filepath.Join(tmp, "motw_utf16.zip")
+	dstDir := filepath.Join(tmp, "extract")
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	w, _ := zw.Create("test.txt:Zone.Identifier")
+
+	// UTF-16LE encoded Zone.Identifier with BOM (0xFF, 0xFE)
+	rawInput := "[ZoneTransfer]\r\nZoneId=3\r\nReferrerUrl=http://evil.com\r\n"
+	utf16Input := encodeUTF16LE(rawInput)
+	w.Write(utf16Input)
+	zw.Close()
+	f.Close()
+
+	e, _ := NewExtractor(zipPath, dstDir)
+	if err := e.Extract(context.Background()); err != nil {
+		t.Fatalf("extraction failed: %v", err)
+	}
+	e.Close()
+
+	data, err := os.ReadFile(filepath.Join(dstDir, "test.txt:Zone.Identifier"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !isUTF16LE(data) {
+		t.Fatal("expected sanitized output to remain UTF-16LE encoded")
+	}
+
+	decoded := decodeUTF16LE(data)
+	expected := "[ZoneTransfer]\r\nZoneId=3\r\n"
+	if decoded != expected {
+		t.Errorf("expected sanitized UTF-16LE content %q, got %q", expected, decoded)
+	}
+}
 func TestExtractor_KeepBroken(t *testing.T) {
 	tmp := t.TempDir()
 	zipPath := filepath.Join(tmp, "broken.zip")
