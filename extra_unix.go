@@ -44,6 +44,7 @@ func appendUnix000dExtra(extra []byte, hdr *FileHeader) []byte {
 	return append(extra, buf...)
 }
 
+
 func appendXattrs(extra []byte, xattrs map[string]string) []byte {
 	if len(xattrs) == 0 {
 		return extra
@@ -54,9 +55,9 @@ func appendXattrs(extra []byte, xattrs map[string]string) []byte {
 		binary.LittleEndian.PutUint16(kv[0:2], uint16(len(k)))
 		binary.LittleEndian.PutUint16(kv[2:4], uint16(len(v)))
 		payload = append(payload, kv[0:2]...)
-		payload = append(payload, []byte(k)...)
+		payload = append(payload, k...)
 		payload = append(payload, kv[2:4]...)
-		payload = append(payload, []byte(v)...)
+		payload = append(payload, v...)
 	}
 	var head [4]byte
 	binary.LittleEndian.PutUint16(head[0:2], xattrExtraID)

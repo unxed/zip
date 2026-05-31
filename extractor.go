@@ -308,6 +308,7 @@ func (e *Extractor) Written() (bytes, entries int64) {
 }
 
 func (e *Extractor) Extract(ctx context.Context) (err error) {
+	parentCtx := ctx
 	if e.options.incremental {
 		dumpdirPath := filepath.Join(e.chroot, ".zip_dumpdir")
 		if _, err := os.Stat(dumpdirPath); os.IsNotExist(err) {
@@ -450,7 +451,7 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 			}
 
 			switch {
-			case file.Mode()&os.ModeSymlink != 0 || file.Linkname != "":
+			case file.Mode()&os.ModeSymlink != 0 || file.Linkname != "" || strings.Contains(file.Name, ":"):
 				continue
 
 			case file.Mode().IsDir():
@@ -523,6 +524,22 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 			}
 			err = e.updateFileMetadata(path, file)
 			if err != nil {
+				return err
+			}
+		}
+
+		for _, file := range e.zr.File {
+			if !strings.Contains(file.Name, ":") {
+				continue
+			}
+			path, err := filepath.Abs(filepath.Join(e.chroot, file.Name))
+			if err != nil {
+				return err
+			}
+			if err := e.createFile(parentCtx, path, file); err != nil {
+				return err
+			}
+			if err := e.updateFileMetadata(path, file); err != nil {
 				return err
 			}
 		}

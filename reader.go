@@ -121,8 +121,12 @@ func (r *Reader) salvage(rdr io.ReaderAt, size int64) error {
 				f.Name = string(data[:nlen])
 				f.Extra = data[nlen:]
 				r.File = append(r.File, f)
-				off += fileHeaderLen + int64(nlen) + int64(elen) + int64(f.CompressedSize64)
-				continue
+
+				skip := fileHeaderLen + int64(nlen) + int64(elen) + int64(f.CompressedSize64)
+				if skip > 0 && off+skip < size {
+					off += skip
+					continue
+				}
 			}
 		}
 		off++

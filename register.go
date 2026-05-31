@@ -214,9 +214,6 @@ var (
 func init() {
 	compressors.Store(Store, Compressor(func(w io.Writer) (io.WriteCloser, error) { return &nopCloser{w}, nil }))
 	compressors.Store(Deflate, Compressor(func(w io.Writer) (io.WriteCloser, error) { return newFlateWriter(w), nil }))
-	// Deflate64 writing is not natively supported by klauspost/compress,
-	// but Deflate is a valid compatible subset.
-	compressors.Store(Deflate64, Compressor(func(w io.Writer) (io.WriteCloser, error) { return newFlateWriter(w), nil }))
 	compressors.Store(ZSTD, Compressor(newZstdWriter))
 
 	decompressors.Store(Store, Decompressor(io.NopCloser))
@@ -227,7 +224,10 @@ func init() {
 	decompressors.Store(ZSTD, Decompressor(newZstdReader))
 }
 
-const maxDictSize = 128 << 20 // 128 MB max memory for decompilers to prevent RAM bomb DoS
+// MaxDecompressionDictSize defines the maximum dictionary memory allocation (in bytes)
+// allowed for PPMd and LZMA decompilers to prevent RAM bomb DoS attacks.
+// Defaults to 128 MB.
+var MaxDecompressionDictSize int64 = 128 << 20
 
 type errorReader struct{ err error }
 func (e errorReader) Read(p []byte) (int, error) { return 0, e.err }
@@ -247,7 +247,7 @@ func newPPMdReader(r io.Reader, size uint64) io.ReadCloser {
 	order := int(val&0xF) + 1
 	memSize := (int((val>>4)&0xFF) + 1)
 
-	if memSize > maxDictSize/(1024*1024) {
+	if int64(memSize) > MaxDecompressionDictSize/(1024*1024) {
 		return errorReader{fmt.Errorf("zip: PPMd memory limit exceeded (%d MB)", memSize)}
 	}
 
@@ -280,7 +280,7 @@ func newLZMAReader(r io.Reader) io.ReadCloser {
 	}
 
 	dictSize := binary.LittleEndian.Uint32(props[1:5])
-	if dictSize > maxDictSize {
+	if int64(dictSize) > MaxDecompressionDictSize {
 		return errorReader{fmt.Errorf("zip: LZMA dictionary limit exceeded (%d bytes)", dictSize)}
 	}
 

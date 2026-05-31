@@ -852,6 +852,9 @@ func (im *inflaterManaged) decodeBlock(input *inputBuffer, endOfBlockCodeSeen *b
 		case stateHaveDistCode:
 			var offset int
 			if im.distanceCode > 3 {
+				if int(im.distanceCode) >= len(distanceBasePosition) {
+					return errDataError
+				}
 				im.extraBits = int32((im.distanceCode - 2) >> 1)
 				bits, err := input.getBits(im.extraBits)
 				if err != nil {

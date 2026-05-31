@@ -12,5 +12,12 @@ func preallocate(f *os.File, size int64) error {
 	if size <= 0 {
 		return nil
 	}
-	return unix.Fallocate(int(f.Fd()), 0, 0, size)
+	err := unix.Fallocate(int(f.Fd()), 0, 0, size)
+	if err != nil {
+		// Ignore filesystem-unsupported errors as preallocation is a performance optimization
+		if err == unix.EOPNOTSUPP || err == unix.ENOSYS || err == unix.ENOTTY || err == unix.EINVAL {
+			return nil
+		}
+	}
+	return err
 }

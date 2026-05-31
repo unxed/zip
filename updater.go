@@ -141,12 +141,12 @@ func (u *Updater) init(size int64) error {
 		return errors.New("zip: updating archives with encrypted central directory is not supported")
 	}
 	u.baseOffset = baseOffset
-	u.dirOffset = int64(end.directoryOffset)
+	u.dirOffset = int64(end.directoryOffset) + baseOffset
 	if end.directorySize < uint64(size) && (uint64(size)-end.directorySize)/30 >= end.directoryRecords {
 		u.dir = make([]*header, 0, end.directoryRecords)
 	}
 	u.comment = end.comment
-	if _, err = u.rw.Seek(u.baseOffset+int64(end.directoryOffset), io.SeekStart); err != nil {
+	if _, err = u.rw.Seek(u.dirOffset, io.SeekStart); err != nil {
 		return err
 	}
 
@@ -361,7 +361,7 @@ func (u *Updater) RemoveFile(dirIndex int) (int64, error) {
 		}
 		_, err = u.rw.WriteAt(buffer[:n], wp)
 		if err != nil {
-			return 0, fmt.Errorf("zip: rewind data: ReadAt: %w", err)
+			return 0, fmt.Errorf("zip: rewind data: WriteAt: %w", err)
 		}
 		rp += int64(n)
 		wp += int64(n)

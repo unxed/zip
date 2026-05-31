@@ -5,6 +5,7 @@ package zip
 
 import (
 	"os"
+	"runtime"
 	"syscall"
 	"unsafe"
 
@@ -111,12 +112,16 @@ func applyXattrs(path string, hdr *FileHeader) error {
 		}
 
 		var ptr uintptr
+		var bytesVal []byte
 		if len(v) > 0 {
-			bytesVal := []byte(v)
+			bytesVal = []byte(v)
 			ptr = uintptr(unsafe.Pointer(&bytesVal[0]))
 		}
 
 		unix.ExtattrSetLink(path, ns, attrName, ptr, len(v))
+		if len(bytesVal) > 0 {
+			runtime.KeepAlive(bytesVal)
+		}
 	}
 	return nil
 }
