@@ -1,4 +1,4 @@
-# f4 ZIP Extensions Specification (Version 0.1)
+# f4 ZIP Extensions Specification (Version 0.2)
 
 ## 1. Abstract
 The **f4 ZIP Extensions** provide a set of additional metadata fields and conventions designed to enhance cross-platform file system fidelity within ZIP archives. These extensions were originally developed for `unxed/zip` golang library used in the **f4** — a cross-platform, asynchronous Far Manager clone.
@@ -21,10 +21,10 @@ Encodes POSIX Extended Attributes (xattrs) as a series of key-value pairs.
 - **Filtering:** Implementers SHOULD filter out platform-specific transient attributes (e.g., `com.apple.metadata:*` on macOS if not required) to avoid bloating.
 - **Security:** When extracting, be cautious with `security.*` or `system.*` namespaces. Only restore them if the process has sufficient privileges and the user explicitly requests it.
 
-### 2.2. Unix Owner Names (Extra Field `0x7817`)
+### 2.2. Unix Owner Names (Extra Field `0x7812`)
 Stores user and group names as UTF-8 strings. This complements the numeric UID/GID (`0x7875`), providing portability across systems where numeric IDs for the same user name differ.
 
-**Header ID:** `0x7817`
+**Header ID:** `0x7812`
 **Data Layout:**
 - `[UnameLength]`: 2 bytes (Little Endian)
 - `[Uname]`: `UnameLength` bytes (UTF-8)
@@ -53,10 +53,10 @@ A control file stored within the archive to facilitate "incremental restore" or 
 
 **Behavior:**
 During extraction with "incremental" mode enabled, any file present in the target directory but *NOT* listed in `.zip_dumpdir` SHOULD be deleted.
-### 2.5. Seek Index (Extra Field `0x7812`)
+### 2.5. Seek Index (Extra Field `0x7817`)
 To allow fast random access (similar to `ratarmount`) inside compressed streams (especially large files or `solid.zip` containers), an entry MAY include a Seek Index extra field.
 
-**Header ID:** `0x7812`
+**Header ID:** `0x7817`
 **Data Layout:**
 - `[ChunkSize]`: 4 bytes (Little Endian, uncompressed block size, e.g., 1MB).
 - `[Offsets...]`: Array of 8-byte (Little Endian) integers representing the **relative byte offset** from the beginning of the compressed data stream (immediately after the local header) to the start of each uncompressed chunk.
