@@ -1,6 +1,7 @@
 package zip
 
 import (
+    "encoding/binary"
 	"fmt"
 	"time"
 	"bytes"
@@ -42,6 +43,63 @@ func TestWriter_ZIP64Forced(t *testing.T) {
 
 	if zr.File[0].UncompressedSize64 != uint64(uint32max)+1 {
 		t.Errorf("size mismatch in ZIP64: got %d", zr.File[0].UncompressedSize64)
+	}
+}
+func TestWriter_ZIP64LocalHeaderExtra(t *testing.T) {
+	buf := new(bytes.Buffer)
+	w := NewWriter(buf)
+
+	fh := &FileHeader{
+		Name:               "huge.txt",
+		Method:             Store,
+		UncompressedSize64: uint64(uint32max) + 1,
+		CompressedSize64:   uint64(uint32max) + 1,
+	}
+
+	wr, err := w.CreateRaw(fh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wr.Write([]byte("fake data"))
+	w.Close()
+
+	raw := buf.Bytes()
+	if !bytes.Equal(raw[:4], []byte{0x50, 0x4b, 0x03, 0x04}) {
+		t.Fatal("invalid local header signature")
+	}
+
+	// Read lengths to parse extra fields dynamically
+	filenameLen := binary.LittleEndian.Uint16(raw[26:28])
+	extraLen := binary.LittleEndian.Uint16(raw[28:30])
+
+	if filenameLen != uint16(len("huge.txt")) {
+		t.Fatalf("unexpected filename length: %d", filenameLen)
+	}
+
+	extraStart := 30 + int(filenameLen)
+	extraBytes := raw[extraStart : extraStart+int(extraLen)]
+
+	foundZip64 := false
+	for len(extraBytes) >= 4 {
+		tag := binary.LittleEndian.Uint16(extraBytes[:2])
+		size := binary.LittleEndian.Uint16(extraBytes[2:4])
+		if tag == zip64ExtraID {
+			foundZip64 = true
+			if size != 16 {
+				t.Errorf("expected ZIP64 size in local header to be 16, got %d", size)
+			}
+			uncomp := binary.LittleEndian.Uint64(extraBytes[4:12])
+			comp := binary.LittleEndian.Uint64(extraBytes[12:20])
+			if uncomp != uint64(uint32max)+1 || comp != uint64(uint32max)+1 {
+				t.Errorf("incorrect sizes in local header ZIP64: uncomp=%d, comp=%d", uncomp, comp)
+			}
+			break
+		}
+		extraBytes = extraBytes[4+size:]
+	}
+
+	if !foundZip64 {
+		t.Error("ZIP64 extra block (0x0001) was not found in the Local Header of a file > 4GB")
 	}
 }
 

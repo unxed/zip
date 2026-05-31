@@ -48,6 +48,45 @@ func TestReader_DataDescriptorNoSignature(t *testing.T) {
 	}
 }
 
+func TestReadDataDescriptor_Collision(t *testing.T) {
+	// Case 1: CRC32 of the file is exactly the signature (0x08074b50),
+	// and there is NO signature in the data descriptor.
+	f := &File{
+		FileHeader: FileHeader{
+			CRC32: 0x08074b50,
+		},
+	}
+	// Buffer has: 0x08074b50, then some sizes (8 bytes)
+	buf1 := []byte{
+		0x50, 0x4b, 0x07, 0x08, // CRC32 (matches signature)
+		0x05, 0x00, 0x00, 0x00, // CompSize
+		0x05, 0x00, 0x00, 0x00, // UncompSize
+		0x00, 0x00, 0x00, 0x00, // Padding
+	}
+	err := readDataDescriptor(bytes.NewReader(buf1), f)
+	if err != nil {
+		t.Errorf("failed on no-sig collision: %v", err)
+	}
+
+	// Case 2: CRC32 is some other value, and signature IS present.
+	f2 := &File{
+		FileHeader: FileHeader{
+			CRC32: 0x12345678,
+		},
+	}
+	buf2 := []byte{
+		0x50, 0x4b, 0x07, 0x08, // Signature
+		0x78, 0x56, 0x34, 0x12, // CRC32
+		0x05, 0x00, 0x00, 0x00, // CompSize
+		0x05, 0x00, 0x00, 0x00, // UncompSize
+		0x00, 0x00, 0x00, 0x00, // Padding
+	}
+	err = readDataDescriptor(bytes.NewReader(buf2), f2)
+	if err != nil {
+		t.Errorf("failed on signature present: %v", err)
+	}
+}
+
 func TestReader_TruncatedFile(t *testing.T) {
 	// 1. Completely short file
 	_, err := NewReader(bytes.NewReader([]byte("PK")), 2)
