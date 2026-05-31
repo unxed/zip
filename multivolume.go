@@ -87,6 +87,10 @@ func openMultiVolume(mainPath string) (io.ReaderAt, int64, io.Closer, error) {
 	for i := 1; ; i++ {
 		volPath := fmt.Sprintf("%s.z%02d", prefix, i)
 		f, err := os.Open(volPath)
+		if err != nil && os.IsNotExist(err) {
+			volPathUpper := fmt.Sprintf("%s.Z%02d", prefix, i)
+			f, err = os.Open(volPathUpper)
+		}
 		if err != nil {
 			if os.IsNotExist(err) {
 				break // No more volumes

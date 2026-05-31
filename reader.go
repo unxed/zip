@@ -108,20 +108,40 @@ func (r *Reader) salvage(rdr io.ReaderAt, size int64) error {
 			f.ModifiedTime = b.uint16()
 			f.ModifiedDate = b.uint16()
 			f.CRC32 = b.uint32()
-			f.CompressedSize = b.uint32()
-			f.UncompressedSize = b.uint32()
-			f.CompressedSize64 = uint64(f.CompressedSize)
-			f.UncompressedSize64 = uint64(f.UncompressedSize)
-			nlen := int(b.uint16())
-			elen := int(b.uint16())
+                    f.CompressedSize = b.uint32()
+                    f.UncompressedSize = b.uint32()
+                    f.CompressedSize64 = uint64(f.CompressedSize)
+                    f.UncompressedSize64 = uint64(f.UncompressedSize)
+                    nlen := int(b.uint16())
+                    elen := int(b.uint16())
 
-			data := make([]byte, nlen+elen)
-			if _, err := rdr.ReadAt(data, off+fileHeaderLen); err == nil {
-				f.Name = string(data[:nlen])
-				f.Extra = data[nlen:]
-				r.File = append(r.File, f)
+                    data := make([]byte, nlen+elen)
+                    if _, err := rdr.ReadAt(data, off+fileHeaderLen); err == nil {
+                        f.Name = string(data[:nlen])
+                        f.Extra = data[nlen:]
 
-				skip := fileHeaderLen + int64(nlen) + int64(elen) + int64(f.CompressedSize64)
+                        if f.CompressedSize == uint32max || f.UncompressedSize == uint32max {
+                            for extra := readBuf(f.Extra); len(extra) >= 4; {
+                                tag := extra.uint16()
+                                size := int(extra.uint16())
+                                if len(extra) < size {
+                                    break
+                                }
+                                fieldBuf := extra.sub(size)
+                                if tag == zip64ExtraID {
+                                    if f.UncompressedSize == uint32max && len(fieldBuf) >= 8 {
+                                        f.UncompressedSize64 = fieldBuf.uint64()
+                                    }
+                                    if f.CompressedSize == uint32max && len(fieldBuf) >= 8 {
+                                        f.CompressedSize64 = fieldBuf.uint64()
+                                    }
+                                }
+                            }
+                        }
+
+                        r.File = append(r.File, f)
+
+                        skip := fileHeaderLen + int64(nlen) + int64(elen) + int64(f.CompressedSize64)
 				if skip > 0 && off+skip < size {
 					off += skip
 					continue

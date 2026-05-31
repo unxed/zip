@@ -530,7 +530,7 @@ func (a *Archiver) compressFile(ctx context.Context, f *os.File, fi os.FileInfo,
 	}
 
 	br.Reset(tmp)
-	_, err = br.WriteTo(ctxCountWriter{w, &a.written, ctx})
+	_, err = br.WriteTo(&ctxCountWriter{w, &a.written, ctx})
 	return err
 }
 
@@ -550,7 +550,7 @@ func (a *Archiver) compressFileSimple(ctx context.Context, f *os.File, fi os.Fil
 		return err
 	}
 
-	_, err = br.WriteTo(ctxCountWriter{w, &a.written, ctx})
+	_, err = br.WriteTo(&ctxCountWriter{w, &a.written, ctx})
 	return err
 }
 
@@ -582,7 +582,7 @@ type ctxCountWriter struct {
 	ctx     context.Context
 }
 
-func (w ctxCountWriter) Write(p []byte) (n int, err error) {
+func (w *ctxCountWriter) Write(p []byte) (n int, err error) {
 	if err = w.ctx.Err(); err == nil {
 		n, err = w.w.Write(p)
 		atomic.AddInt64(w.written, int64(n))

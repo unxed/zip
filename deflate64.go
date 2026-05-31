@@ -113,6 +113,24 @@ func (dr *deflate64Reader) Close() error {
 func decodeDeflate64(r io.Reader) io.ReadCloser {
 	return newDeflate64Reader(r)
 }
+var (
+	staticLiteralTree  = initStaticLiteralTree()
+	staticDistanceTree = initStaticDistanceTree()
+)
+
+func initStaticLiteralTree() *huffmanTree {
+	t := &huffmanTree{}
+	lens := getStaticLiteralTreeLength()
+	t.newInPlace(lens[:])
+	return t
+}
+
+func initStaticDistanceTree() *huffmanTree {
+	t := &huffmanTree{}
+	lens := getStaticDistanceTreeLength()
+	t.newInPlace(lens[:])
+	return t
+}
 
 // --- Inline types and algorithms from deflate64-rs ---
 
@@ -382,17 +400,11 @@ func newHuffmanTreeInvalid() *huffmanTree {
 }
 
 func newHuffmanTreeStaticLiteral() *huffmanTree {
-	t := &huffmanTree{}
-	lens := getStaticLiteralTreeLength()
-	t.newInPlace(lens[:])
-	return t
+	return staticLiteralTree
 }
 
 func newHuffmanTreeStaticDistance() *huffmanTree {
-	t := &huffmanTree{}
-	lens := getStaticDistanceTreeLength()
-	t.newInPlace(lens[:])
-	return t
+	return staticDistanceTree
 }
 
 func getStaticLiteralTreeLength() [maxLiteralTreeElements]byte {

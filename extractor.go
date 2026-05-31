@@ -353,7 +353,7 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 			if terr != nil {
 				return err
 			}
-			_, terr = io.Copy(tempFile, r2)
+			_, terr = io.Copy(tempFile, &ctxReader{r: r2, ctx: ctx})
 			r2.Close()
 			if terr != nil {
 				return err
@@ -749,8 +749,28 @@ func (e *Extractor) extractSolidStream(r io.Reader, ctx context.Context) error {
 			}
 
 			if flags&0x8 != 0 {
-				var desc [16]byte
-				if _, err := io.ReadFull(r, desc[:]); err != nil {
+				var sigBuf [4]byte
+				if _, err := io.ReadFull(r, sigBuf[:]); err != nil {
+					return err
+				}
+				sig := binary.LittleEndian.Uint32(sigBuf[:])
+				isZip64 := compSize == 0xFFFFFFFF || uncompSize == 0xFFFFFFFF
+				var remaining int
+				if sig == dataDescriptorSignature {
+					if isZip64 {
+						remaining = 20
+					} else {
+						remaining = 12
+					}
+				} else {
+					if isZip64 {
+						remaining = 16
+					} else {
+						remaining = 8
+					}
+				}
+				discardBuf := make([]byte, remaining)
+				if _, err := io.ReadFull(r, discardBuf); err != nil {
 					return err
 				}
 			}
@@ -775,8 +795,28 @@ func skipBytes(r io.Reader, n int64, flags uint16) error {
 		return err
 	}
 	if flags&0x8 != 0 {
-		var desc [16]byte
-		if _, err := io.ReadFull(r, desc[:]); err != nil {
+		var sigBuf [4]byte
+		if _, err := io.ReadFull(r, sigBuf[:]); err != nil {
+			return err
+		}
+		sig := binary.LittleEndian.Uint32(sigBuf[:])
+		isZip64 := n >= int64(uint32max)
+		var remaining int
+		if sig == dataDescriptorSignature {
+			if isZip64 {
+				remaining = 20
+			} else {
+				remaining = 12
+			}
+		} else {
+			if isZip64 {
+				remaining = 16
+			} else {
+				remaining = 8
+			}
+		}
+		discardBuf := make([]byte, remaining)
+		if _, err := io.ReadFull(r, discardBuf); err != nil {
 			return err
 		}
 	}
@@ -918,7 +958,7 @@ func (e *Extractor) createFile(ctx context.Context, path string, file *File) (er
 			bufioWriterPool.Put(bw)
 		}()
 
-		bw.Reset(ctxCountWriter{f, &e.written, ctx})
+		bw.Reset(&ctxCountWriter{f, &e.written, ctx})
 		_, err = bw.ReadFrom(lr)
 		if err != nil {
 			return err
@@ -993,6 +1033,17 @@ func (e *Extractor) updateFileMetadata(path string, file *File) error {
 	return e.options.chownErrorHandler(file.Name, err)
 }
 
+type ctxReader struct {
+	r   io.Reader
+	ctx context.Context
+}
+
+func (cr *ctxReader) Read(p []byte) (int, error) {
+	if err := cr.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return cr.r.Read(p)
+}
 func (e *Extractor) linksToDirs(targetPath string) error {
 	if !strings.HasPrefix(targetPath, e.chroot) {
 		return nil
