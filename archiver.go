@@ -227,20 +227,20 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 			innerW.Write([]byte(dumpdirContent))
 		}
 
-		origZw := a.zw
-		origMethod := a.options.method
-		origSolid := a.options.solid
+		innerA := &Archiver{
+			zw:            innerZw,
+			options:       a.options,
+			chroot:        a.chroot,
+			seenHardLinks: a.seenHardLinks,
+		}
+		innerA.options.method = Store
+		innerA.options.solid = false
 
-		a.zw = innerZw
-		a.options.method = Store
-		a.options.solid = false
-
-		err = a.Archive(ctx, files)
+		err = innerA.Archive(ctx, files)
 		innerZw.Close()
 
-		a.zw = origZw
-		a.options.method = origMethod
-		a.options.solid = origSolid
+		atomic.AddInt64(&a.entries, atomic.LoadInt64(&innerA.entries))
+		atomic.AddInt64(&a.written, atomic.LoadInt64(&innerA.written))
 
 		incOnSuccess(&a.entries, err)
 		return err

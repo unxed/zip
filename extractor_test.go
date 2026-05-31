@@ -719,6 +719,33 @@ func TestSolid_CRC32Check(t *testing.T) {
 	}
 	e.Close()
 }
+func TestExtractor_IncrementalSafeguard(t *testing.T) {
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "inc.zip")
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	w, _ := zw.Create(".zip_dumpdir")
+	w.Write([]byte("file.txt\n"))
+	zw.Close()
+	f.Close()
+
+	trapDir := filepath.Join(tmpDir, "trap")
+	os.Mkdir(trapDir, 0755)
+	os.WriteFile(filepath.Join(trapDir, "valuable.txt"), []byte("do not delete me"), 0644)
+
+	e, _ := NewExtractor(zipPath, trapDir, WithExtractorIncremental(true))
+	err := e.Extract(context.Background())
+	e.Close()
+
+	if err == nil || !strings.Contains(err.Error(), "refusing to extract incremental archive into a non-empty directory") {
+		t.Errorf("Expected safeguard error, got: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(trapDir, "valuable.txt")); os.IsNotExist(err) {
+		t.Error("Safeguard failed: valuable file was deleted!")
+	}
+}
 func TestSolidFallback_Zip(t *testing.T) {
 	tmpDir := t.TempDir()
 	zipPath := filepath.Join(tmpDir, "fallback.zip")

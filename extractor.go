@@ -1,6 +1,7 @@
 package zip
 
 import (
+    "errors"
 	"bufio"
 	"bytes"
 	"context"
@@ -307,6 +308,20 @@ func (e *Extractor) Written() (bytes, entries int64) {
 }
 
 func (e *Extractor) Extract(ctx context.Context) (err error) {
+	if e.options.incremental {
+		dumpdirPath := filepath.Join(e.chroot, ".zip_dumpdir")
+		if _, err := os.Stat(dumpdirPath); os.IsNotExist(err) {
+			f, err := os.Open(e.chroot)
+			if err == nil {
+				names, err := f.Readdirnames(1)
+				f.Close()
+				if err == nil && len(names) > 0 {
+					return errors.New("zip: refusing to extract incremental archive into a non-empty directory without a pre-existing .zip_dumpdir marker (prevents accidental data loss)")
+				}
+			}
+		}
+	}
+
 	if len(e.zr.File) == 1 && (e.zr.File[0].Name == "Solid.zip" || strings.HasSuffix(e.zr.File[0].Name, ".solid")) {
 		r, err := e.zr.File[0].Open()
 		if err != nil {

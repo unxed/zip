@@ -91,6 +91,12 @@ func (d *Directory) HeaderOffset() int64 {
 
 // Updater allows to modify & append files into an existing zip archive without
 // decompress the whole file.
+//
+// WARNING: In-place updates modify the underlying file directly. If the process
+// crashes, is killed, or encounters a power failure during an operation
+// (especially APPEND_MODE_OVERWRITE or RemoveFile), the archive may be left in
+// a corrupted and unrecoverable state. For mission-critical data, it is
+// recommended to backup the archive before updating.
 type Updater struct {
 	rw          *sectionReaderWriter
 	rws         io.ReadWriteSeeker
