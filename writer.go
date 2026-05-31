@@ -463,15 +463,42 @@ func writeHeader(w io.Writer, h *header) error {
 		}
 		h.Flags |= 0x8
 	}
+	var extra []byte
+	extra = append(extra, h.Extra...)
+	if (h.CompressedSize64 >= uint32max || h.UncompressedSize64 >= uint32max) && (h.raw || !h.hasDataDescriptor()) {
+		hasZip64 := false
+		for eb := readBuf(h.Extra); len(eb) >= 4; {
+			tag := eb.uint16()
+			size := int(eb.uint16())
+			if tag == zip64ExtraID {
+				hasZip64 = true
+				break
+			}
+			if len(eb) < size {
+				break
+			}
+			eb = eb[size:]
+		}
+		if !hasZip64 {
+			var z64Buf [20]byte
+			eb := writeBuf(z64Buf[:])
+			eb.uint16(zip64ExtraID)
+			eb.uint16(16)
+			eb.uint64(h.UncompressedSize64)
+			eb.uint64(h.CompressedSize64)
+			extra = append(extra, z64Buf[:]...)
+		}
+	}
+
 	b.uint16(uint16(len(h.Name)))
-	b.uint16(uint16(len(h.Extra)))
+	b.uint16(uint16(len(extra)))
 	if _, err := w.Write(buf[:]); err != nil {
 		return err
 	}
 	if _, err := io.WriteString(w, h.Name); err != nil {
 		return err
 	}
-	_, err := w.Write(h.Extra)
+	_, err := w.Write(extra)
 	return err
 }
 

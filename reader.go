@@ -313,7 +313,11 @@ func (f *File) Open() (io.ReadCloser, error) {
 	}
 	var desr io.Reader
 	if f.hasDataDescriptor() {
-		desr = io.NewSectionReader(f.zipr, f.headerOffset+bodyOffset+size, dataDescriptorLen)
+		ddLen := int64(dataDescriptorLen)
+		if f.zip64 {
+			ddLen = dataDescriptor64Len
+		}
+		desr = io.NewSectionReader(f.zipr, f.headerOffset+bodyOffset+size, ddLen)
 	}
 	rc = &checksumReader{
 		rc:   rc,
@@ -775,40 +779,39 @@ parseExtras:
 }
 
 func readDataDescriptor(r io.Reader, f *File) error {
-	// Specification 4.3.9: Data Descriptor may or may not have a signature.
-	// If the file is ZIP64, fields: CRC32 (4 bytes), Compressed Size (8 bytes), Uncompressed Size (8 bytes).
-
-	sig := make([]byte, 4)
-	if _, err := io.ReadFull(r, sig); err != nil {
-		return err
-	}
-
-	off := 0
-	readSize := 12
-	if binary.LittleEndian.Uint32(sig) == dataDescriptorSignature {
-		off = 0 // Signature consumed
-	} else {
-		// No signature, first 4 bytes are CRC32. Need to return them for processing.
-		off = 4
-	}
-
+	ddLen := 16
 	if f.zip64 {
-		readSize = 20 // 4 (CRC) + 8 + 8
+		ddLen = 24
 	}
-
-	buf := make([]byte, readSize)
-	if off > 0 {
-		copy(buf[:4], sig)
-	}
-	if _, err := io.ReadFull(r, buf[off:]); err != nil {
+	buf := make([]byte, ddLen)
+	n, err := io.ReadFull(r, buf)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
 		return err
 	}
+	if n < 12 {
+		return io.ErrUnexpectedEOF
+	}
 
-	b := readBuf(buf)
-	if b.uint32() != f.CRC32 {
+	sig := binary.LittleEndian.Uint32(buf[:4])
+	var crc uint32
+
+	if sig == dataDescriptorSignature {
+		// Could be signature, could be CRC32.
+		if n >= 8 {
+			crcWithSig := binary.LittleEndian.Uint32(buf[4:8])
+			if crcWithSig == f.CRC32 {
+				return nil // It has a signature, and the next 4 bytes match the CRC32
+			}
+		}
+		// If it didn't match, maybe the CRC32 itself is the signature value and there is no signature.
+		crc = sig
+	} else {
+		crc = sig
+	}
+
+	if crc != f.CRC32 {
 		return ErrChecksum
 	}
-	// We don't check sizes here as they are already read in FileHeader
 	return nil
 }
 

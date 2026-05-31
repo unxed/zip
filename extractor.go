@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"io"
     "io/fs"
 	"os"
@@ -695,9 +696,13 @@ func (e *Extractor) extractSolidStream(r io.Reader, ctx context.Context) error {
 				return err
 			}
 
+			hasher := crc32.NewIEEE()
 			var limitR io.Reader = io.LimitReader(r, int64(uncompSize))
-			_, err = io.Copy(f, limitR)
+			_, err = io.Copy(f, io.TeeReader(limitR, hasher))
 			f.Close()
+			if err == nil && crc32Val != 0 && hasher.Sum32() != crc32Val {
+				err = ErrChecksum
+			}
 			if err != nil {
 				os.Remove(writePath)
 				return err

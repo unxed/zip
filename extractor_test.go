@@ -1,6 +1,7 @@
 package zip
 
 import (
+	"hash/crc32"
     "fmt"
     "bytes"
 	"context"
@@ -673,6 +674,51 @@ func TestSolidAndIncremental_Zip(t *testing.T) {
 	}
 }
 
+func TestSolid_CRC32Check(t *testing.T) {
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "solid_crc.zip")
+	dstDir := filepath.Join(tmpDir, "dst")
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	hdr := &FileHeader{
+		Name:   "Solid.zip",
+		Method: Store,
+	}
+	w, _ := zw.CreateHeader(hdr)
+	innerZw := NewWriter(w)
+	data := []byte("data to be corrupted")
+	innerW, _ := innerZw.CreateRaw(&FileHeader{
+		Name:               "test.txt",
+		Method:             Store,
+		CompressedSize64:   uint64(len(data)),
+		UncompressedSize64: uint64(len(data)),
+		CRC32:              crc32.ChecksumIEEE(data),
+	})
+	innerW.Write(data)
+	innerZw.Close()
+	zw.Close()
+	f.Close()
+
+	// Corrupt the data in the inner file to trigger CRC mismatch
+	raw, _ := os.ReadFile(zipPath)
+	// Search for "data to be"
+	idx := bytes.Index(raw, []byte("data to be"))
+	if idx != -1 {
+		raw[idx] = 'D'
+	}
+	os.WriteFile(zipPath, raw, 0644)
+
+	e, err := NewExtractor(zipPath, dstDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = e.Extract(context.Background())
+	if err == nil || err != ErrChecksum {
+		t.Errorf("expected ErrChecksum for corrupted Solid archive, got: %v", err)
+	}
+	e.Close()
+}
 func TestSolidFallback_Zip(t *testing.T) {
 	tmpDir := t.TempDir()
 	zipPath := filepath.Join(tmpDir, "fallback.zip")
