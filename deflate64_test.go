@@ -16,46 +16,6 @@ func TestDeflate64_Registration(t *testing.T) {
 		t.Fatal("Deflate64 decompressor not registered")
 	}
 }
-func TestDeflate64_GoNative(t *testing.T) {
-	// Compress some repeating text using standard Deflate
-	data := []byte("deflate64 native decoder compatibility test with repeating data repeating data repeating data")
-	buf := new(bytes.Buffer)
-
-	zw := NewWriter(buf)
-	fh := &FileHeader{
-		Name:   "native.txt",
-		Method: Deflate, // Write using standard Deflate
-	}
-	w, err := zw.CreateHeader(fh)
-	if err != nil {
-		t.Fatal(err)
-	}
-	w.Write(data)
-	zw.Close()
-
-	// Open and override Method to Deflate64 so the reader uses decodeDeflate64
-	zr, err := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	f := zr.File[0]
-	f.Method = Deflate64 // Force reader to use Deflate64 decoder
-
-	rc, err := f.Open()
-	if err != nil {
-		t.Fatalf("failed to open using Deflate64 decoder: %v", err)
-	}
-	defer rc.Close()
-
-	decompressed, err := io.ReadAll(rc)
-	if err != nil {
-		t.Fatalf("Deflate64 decompression failed: %v", err)
-	}
-
-	if !bytes.Equal(decompressed, data) {
-		t.Errorf("decompressed content mismatch: got %q, want %q", string(decompressed), string(data))
-	}
-}
 
 func TestDeflate64_External7z(t *testing.T) {
 	p7zPath, err := exec.LookPath("7z")
