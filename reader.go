@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"hash"
 	"hash/crc32"
 	"io"
@@ -405,7 +404,6 @@ func (s *solidReadSeeker) Read(p []byte) (int, error) {
 
 		compOffset := int64(s.f.SeekIndex[blockIdx])
 		bodyOffset, err := s.f.findBodyOffset()
-		fmt.Printf("[DEBUG-SEEK] Reading block %d. Uncompressed offset: %d, SeekIndex entry (compressed offset): %d, BodyOffset: %d\n", blockIdx, s.off, compOffset, bodyOffset)
 		if err != nil {
 			return 0, err
 		}
@@ -478,12 +476,10 @@ func (r *checksumReader) Stat() (fs.FileInfo, error) {
 }
 
 func (r *checksumReader) Read(b []byte) (n int, err error) {
-	fmt.Printf("[DEBUG-CHECK] Read called. nread: %d, UncompressedSize: %d\n", r.nread, r.f.UncompressedSize64)
 	if r.err != nil {
 		return 0, r.err
 	}
 	n, err = r.rc.Read(b)
-	fmt.Printf("[DEBUG-CHECK] Inner Read returned n: %d, err: %v\n", n, err)
 	r.hash.Write(b[:n])
 	r.nread += uint64(n)
 	if r.nread > r.f.UncompressedSize64 {
@@ -493,12 +489,10 @@ func (r *checksumReader) Read(b []byte) (n int, err error) {
 		return
 	}
 	if err == io.EOF {
-		fmt.Printf("[DEBUG-CHECK] Inner EOF reached.\n")
 		if r.nread != r.f.UncompressedSize64 {
 			return 0, io.ErrUnexpectedEOF
 		}
 		if r.f.Method == winzipAesExtraID {
-			fmt.Printf("[DEBUG-CHECK] AE file, verifying HMAC/EOF\n")
 			if _, macErr := io.Copy(io.Discard, r.rr); macErr != nil {
 				err = macErr
 			} else {
@@ -525,7 +519,6 @@ func (r *checksumReader) Read(b []byte) (n int, err error) {
 }
 
 func (r *checksumReader) Close() error {
-	fmt.Printf("[DEBUG-CHECK] Close called\n")
 	return r.rc.Close()
 }
 
@@ -584,6 +577,7 @@ func readDirectoryHeader(f *File, r io.Reader) error {
 	packVer := f.CreatorVersion & 0xFF
 
 	f.Name = zipcharset.DecodeText(rawName, isUTF8, packOS, packVer, f.Extra, false)
+	f.Name = strings.ReplaceAll(f.Name, "\\", "/")
 	f.Comment = zipcharset.DecodeText(rawComment, isUTF8, packOS, packVer, f.Extra, true)
 
 	utf8Valid1, utf8Require1 := detectUTF8(f.Name)

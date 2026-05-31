@@ -498,7 +498,10 @@ func (a *Archiver) compressFile(ctx context.Context, f *os.File, fi os.FileInfo,
 	}
 
 	br := bufioReaderPool.Get().(*bufio.Reader)
-	defer bufioReaderPool.Put(br)
+	defer func() {
+		br.Reset(nil)
+		bufioReaderPool.Put(br)
+	}()
 	br.Reset(f)
 
 	_, err = io.Copy(io.MultiWriter(fw, tmp.Hasher()), br)
@@ -533,7 +536,10 @@ func (a *Archiver) compressFile(ctx context.Context, f *os.File, fi os.FileInfo,
 
 func (a *Archiver) compressFileSimple(ctx context.Context, f *os.File, fi os.FileInfo, hdr *FileHeader) error {
 	br := bufioReaderPool.Get().(*bufio.Reader)
-	defer bufioReaderPool.Put(br)
+	defer func() {
+		br.Reset(nil)
+		bufioReaderPool.Put(br)
+	}()
 	br.Reset(f)
 
 	a.m.Lock()

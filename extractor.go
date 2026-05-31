@@ -913,7 +913,10 @@ func (e *Extractor) createFile(ctx context.Context, path string, file *File) (er
 		err = copySparseZip(f, lr, file.UncompressedSize64, &e.written, ctx)
 	} else {
 		bw := bufioWriterPool.Get().(*bufio.Writer)
-		defer bufioWriterPool.Put(bw)
+		defer func() {
+			bw.Reset(nil)
+			bufioWriterPool.Put(bw)
+		}()
 
 		bw.Reset(ctxCountWriter{f, &e.written, ctx})
 		_, err = bw.ReadFrom(lr)

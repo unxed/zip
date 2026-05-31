@@ -156,6 +156,7 @@ var zstdWriterPool sync.Pool
 type pooledZstdWriter struct {
 	mu  sync.Mutex
 	enc *zstd.Encoder
+	w   io.Writer
 }
 
 func (pw *pooledZstdWriter) Write(p []byte) (int, error) {
@@ -174,6 +175,14 @@ func (pw *pooledZstdWriter) Flush() error {
 		return errors.New("Flush after Close")
 	}
 	return pw.enc.Flush()
+}
+
+func (pw *pooledZstdWriter) ResetDict() {
+	pw.mu.Lock()
+	defer pw.mu.Unlock()
+	if pw.enc != nil && pw.w != nil {
+		pw.enc.Reset(pw.w)
+	}
 }
 
 func (pw *pooledZstdWriter) Close() error {
@@ -197,7 +206,7 @@ func newZstdWriter(w io.Writer) (io.WriteCloser, error) {
 		return nil, errors.New("zip: zstd encoder initialization failed")
 	}
 	enc.Reset(w)
-	return &pooledZstdWriter{enc: enc}, nil
+	return &pooledZstdWriter{enc: enc, w: w}, nil
 }
 
 type nopCloser struct {

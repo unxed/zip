@@ -88,7 +88,14 @@ func openMultiVolume(mainPath string) (io.ReaderAt, int64, io.Closer, error) {
 		volPath := fmt.Sprintf("%s.z%02d", prefix, i)
 		f, err := os.Open(volPath)
 		if err != nil {
-			break // No more volumes
+			if os.IsNotExist(err) {
+				break // No more volumes
+			}
+			// Close already opened volumes on error
+			for _, openedFile := range files {
+				openedFile.Close()
+			}
+			return nil, 0, nil, err
 		}
 		fi, _ := f.Stat()
 		offsets = append(offsets, totalSize)
