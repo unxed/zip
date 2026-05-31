@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 
 	"golang.org/x/sync/errgroup"
@@ -240,5 +241,42 @@ func TestPPMd_HeaderParsing(t *testing.T) {
 	rc := newPPMdReader(r, 1000)
 	if rc != nil {
 		// Wait for error or empty result as there is no data after the header
+	}
+}
+func TestPPMd_MemoryLimit(t *testing.T) {
+	// MemSize is bits 4-11 (+1) in MB.
+	// Set to 255 (which means 256MB).
+	// val = 0 | (255 << 4) = 4080 (0x0FF0)
+	header := []byte{0xF0, 0x0F}
+	r := bytes.NewReader(header)
+	rc := newPPMdReader(r, 1000)
+	if rc == nil {
+		t.Fatal("expected non-nil errorReader")
+	}
+	buf := make([]byte, 10)
+	_, err := rc.Read(buf)
+	if err == nil || !strings.Contains(err.Error(), "PPMd memory limit exceeded") {
+		t.Errorf("expected PPMd memory limit error, got: %v", err)
+	}
+}
+
+func TestLZMA_MemoryLimit(t *testing.T) {
+	// Header: 2b version, 2b propSize (5), then 5b props.
+	// props[1:5] is dictSize. Set it to 256MB (268435456 = 0x10000000)
+	header := []byte{
+		0x09, 0x00, // Version
+		0x05, 0x00, // propSize
+		0x5d,       // props[0]
+		0x00, 0x00, 0x00, 0x10, // dictSize 256MB
+	}
+	r := bytes.NewReader(header)
+	rc := newLZMAReader(r)
+	if rc == nil {
+		t.Fatal("expected non-nil errorReader")
+	}
+	buf := make([]byte, 10)
+	_, err := rc.Read(buf)
+	if err == nil || !strings.Contains(err.Error(), "LZMA dictionary limit exceeded") {
+		t.Errorf("expected LZMA memory limit error, got: %v", err)
 	}
 }

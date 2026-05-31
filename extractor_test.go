@@ -719,6 +719,38 @@ func TestSolidFallback_Zip(t *testing.T) {
 		t.Errorf("expected 'some fallback data', got %q", string(data))
 	}
 }
+func TestSolidFallback_LimitExceeded(t *testing.T) {
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "fallback_limit.zip")
+	dstDir := filepath.Join(tmpDir, "dst")
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	hdr := &FileHeader{
+		Name:   "Solid.zip",
+		Method: Store,
+	}
+	w, _ := zw.CreateHeader(hdr)
+	innerZw := NewWriter(w)
+	innerW, _ := innerZw.Create("test.txt")
+	innerW.Write(make([]byte, 200)) // 200 bytes uncompressed Solid.zip
+	innerZw.Close()
+	zw.Close()
+	f.Close()
+
+	os.MkdirAll(dstDir, 0755)
+	// Limit maxFileSize to 5 bytes. maxFallback will be 50 bytes.
+	// 200 > 50, so it should fail.
+	e, err := NewExtractor(zipPath, dstDir, WithExtractorMaxFileSize(5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = e.Extract(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "Solid archive too large for temp file fallback") {
+		t.Errorf("expected fallback limit error, got: %v", err)
+	}
+	e.Close()
+}
 
 func TestExtractor_ConcurrencyIntegrity(t *testing.T) {
 	tmpDir := t.TempDir()
