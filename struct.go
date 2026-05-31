@@ -62,12 +62,12 @@ const (
 	//                      0x756e // ASi UNIX
 	//                             // 0x756f..0x7810 unused
 	xattrExtraID          = 0x7811 // f4 extensions: Xattrs
-	solidSeekIndexExtraID = 0x7812 // f4 extensions: Solid Seek Index (ratarmount-like)
+	unixOwnerNameExtraID  = 0x7812 // f4 extensions: Unix owner/group string names
 	//                      0x7813 // Reserved for further f4 extensions versions
 	//                      0x7814 // Reserved for further f4 extensions versions
 	//                      0x7815 // Reserved for further f4 extensions versions
 	//                      0x7816 // Reserved for further f4 extensions versions
-	unixOwnerNameExtraID  = 0x7817 // f4 extensions: Unix owner/group string names
+	solidSeekIndexExtraID = 0x7817 // f4 extensions: Solid Seek Index (ratarmount-like)
 	//                             // 0x7818..0x7854 unused
 	//                      0x7855 // Info-ZIP UNIX (new)
 	//                      0x7875 // Info-ZIP UNIX (newer UID/GID)
@@ -131,7 +131,7 @@ type FileHeader struct {
 	// NTFS Attributes
 	Acl      []byte // Windows Security Descriptor (ACL)
 
-	// Seek Index (f4 extension 0x7812)
+	// Seek Index (f4 extension 0x7817)
 	SeekChunkSize uint32   // Uncompressed block size (e.g. 1MB)
 	SeekIndex     []uint64 // Compressed offsets for each block
 
@@ -333,13 +333,12 @@ func (fh *FileHeader) injectAutoExtras() uint16 {
 		fh.Extra = appendNtfsAcl(fh.Extra, fh.Acl)
 	}
 
-	// 3.4 Unix Owner/Group Strings (0x7817)
+	// 3.4 Unix Owner/Group Strings (0x7812)
 	if (fh.Uname != "" || fh.Gname != "") && !hasTag(unixOwnerNameExtraID) {
 		fh.Extra = appendUnixOwnerNamesExtra(fh.Extra, fh.Uname, fh.Gname)
 	}
 
-	// 3.5 Seek Index (0x7812)
-	// 3.5 Seek Index (0x7812) - Always replace with latest version if index grew
+	// 3.5 Seek Index (0x7817) - Always replace with latest version if index grew
 	if len(fh.SeekIndex) > 0 && fh.SeekChunkSize > 0 {
 		removeTag(solidSeekIndexExtraID)
 		size := uint16(4 + len(fh.SeekIndex)*8)

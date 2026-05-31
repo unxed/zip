@@ -337,7 +337,7 @@ func (f *File) OpenRaw() (io.Reader, error) {
 }
 
 // OpenSeekable returns a ReadSeeker for the file content.
-// It requires a Seek Index (0x7812) to be present in the archive for compressed files.
+// It requires a Seek Index (0x7817) to be present in the archive for compressed files.
 // If the index is missing, it will return an error for compressed files.
 // For Uncompressed (Store) files, it works natively.
 func (f *File) OpenSeekable() (io.ReadSeeker, error) {

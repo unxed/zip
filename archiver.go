@@ -176,7 +176,7 @@ func (a *Archiver) Written() (bytes, entries int64) {
 func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (err error) {
 	if a.options.solid {
 		hdr := &FileHeader{
-			Name:          "solid.zip",
+			Name:          "Solid.zip",
 			Method:        a.options.method,
 			SeekChunkSize: 1024 * 1024, // Enable 1MB Seek Index for solid archives
 		}

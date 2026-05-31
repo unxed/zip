@@ -635,7 +635,7 @@ func TestSolidAndIncremental_Zip(t *testing.T) {
 			t.Fatalf("Native unzip extraction of outer ZIP failed: %v, output: %s", err, string(output))
 		}
 
-		innerZipPath := filepath.Join(unzipDst, "solid.zip")
+		innerZipPath := filepath.Join(unzipDst, "Solid.zip")
 		unzipInnerDst := filepath.Join(unzipDst, "inner")
 		os.MkdirAll(unzipInnerDst, 0755)
 
@@ -669,7 +669,7 @@ func TestSolidFallback_Zip(t *testing.T) {
 	zw := NewWriter(f)
 
 	hdr := &FileHeader{
-		Name:   "solid.zip",
+		Name:   "Solid.zip",
 		Method: Store,
 	}
 	w, _ := zw.CreateHeader(hdr)
@@ -828,7 +828,7 @@ func TestZipExternalCompatibility_Zip(t *testing.T) {
 			t.Fatalf("7z extraction of outer ZIP failed: %v, output: %s", err, string(output))
 		}
 
-		innerZip := filepath.Join(dstDir, "solid.zip")
+		innerZip := filepath.Join(dstDir, "Solid.zip")
 		innerDst := filepath.Join(dstDir, "inner")
 		cmdInner := exec.Command(p7zPath, "x", "-o"+innerDst, innerZip)
 		if output, err := cmdInner.CombinedOutput(); err != nil {
@@ -856,14 +856,14 @@ func TestZipExternalCompatibility_Zip(t *testing.T) {
 			t.Fatalf("unar extraction of outer ZIP failed: %v, output: %s", err, string(output))
 		}
 
-		innerZip := filepath.Join(dstDir, "solid.zip")
+		innerZip := filepath.Join(dstDir, "Solid.zip")
 		innerDst := filepath.Join(dstDir, "inner")
 		cmdInner := exec.Command(unarPath, "-o", innerDst, innerZip)
 		if output, err := cmdInner.CombinedOutput(); err != nil {
 			t.Fatalf("unar extraction of inner ZIP failed: %v, output: %s", err, string(output))
 		}
 
-		data, err := os.ReadFile(filepath.Join(innerDst, "solid", "src", "test.txt"))
+		data, err := os.ReadFile(filepath.Join(innerDst, "Solid", "src", "test.txt"))
 		if err != nil {
 			data, err = os.ReadFile(filepath.Join(innerDst, "src", "test.txt"))
 		}

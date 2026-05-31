@@ -306,7 +306,7 @@ func (e *Extractor) Written() (bytes, entries int64) {
 }
 
 func (e *Extractor) Extract(ctx context.Context) (err error) {
-	if len(e.zr.File) == 1 && (e.zr.File[0].Name == "solid.zip" || strings.HasSuffix(e.zr.File[0].Name, ".solid")) {
+	if len(e.zr.File) == 1 && (e.zr.File[0].Name == "Solid.zip" || strings.HasSuffix(e.zr.File[0].Name, ".solid")) {
 		r, err := e.zr.File[0].Open()
 		if err != nil {
 			return err
