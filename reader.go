@@ -52,42 +52,53 @@ type File struct {
 	aesInfo      *winzipAesInfo
 }
 
-func OpenReader(name string) (*ReadCloser, error) {
-	// Attempt to open as a multi-volume archive
+// OpenReaderWithPassword opens a ZIP file with a password for Central Directory Encryption.
+func OpenReaderWithPassword(name string, password string) (*ReadCloser, error) {
 	ra, size, closer, err := openMultiVolume(name)
 	if err != nil {
 		return nil, err
 	}
 
 	r := new(ReadCloser)
+	if password != "" {
+		r.SetPassword(password)
+	}
 	if err = r.init(ra, size); err != nil {
 		closer.Close()
 		return nil, err
 	}
 
-	// In ReadCloser.f, we store the main file for compatibility,
-	// but Close() must close all volumes.
 	if mvr, ok := closer.(*multiVolumeReader); ok {
-		r.f = mvr.files[len(mvr.files)-1] // Link to the primary .zip
-		// Replace Close with a custom one to close all volumes
+		r.f = mvr.files[len(mvr.files)-1]
 		r.Reader.r = ra
 	} else {
 		r.f = closer.(*os.File)
 	}
 
-	return r, err
+	return r, nil
 }
 
-func NewReader(r io.ReaderAt, size int64) (*Reader, error) {
+func OpenReader(name string) (*ReadCloser, error) {
+	return OpenReaderWithPassword(name, "")
+}
+
+func NewReaderWithPassword(r io.ReaderAt, size int64, password string) (*Reader, error) {
 	if size < 0 {
 		return nil, errors.New("zip: size cannot be negative")
 	}
 	zr := new(Reader)
+	if password != "" {
+		zr.SetPassword(password)
+	}
 	err := zr.init(r, size)
 	if err != nil && err != ErrInsecurePath {
 		return nil, err
 	}
 	return zr, err
+}
+
+func NewReader(r io.ReaderAt, size int64) (*Reader, error) {
+	return NewReaderWithPassword(r, size, "")
 }
 
 func (r *Reader) salvage(rdr io.ReaderAt, size int64) error {

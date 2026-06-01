@@ -32,15 +32,18 @@ var bufioReaderPool = sync.Pool{
 type ArchiverOption func(*archiverOptions) error
 
 type archiverOptions struct {
-	method      uint16
-	concurrency int
-	bufferSize  int
-	stageDir    string
-	offset      int64
+	method                  uint16
+	concurrency             int
+	bufferSize              int
+	stageDir                string
+	offset                  int64
 	includePlatformMetadata bool
 	xattrs                  bool
 	solid                   bool
 	incremental             bool
+	seekChunkSize           uint32
+	password                string
+	encryptCD               bool
 }
 
 func WithArchiverMethod(method uint16) ArchiverOption {
@@ -109,12 +112,25 @@ func WithArchiverSolid(b bool) ArchiverOption {
 }
 
 // WithArchiverSeekIndex enables generation of a Seek Index for large files or solid archives.
-// chunkSize is the uncompressed block size in bytes (e.g. 1024*1024 for 1MB).
 func WithArchiverSeekIndex(chunkSize uint32) ArchiverOption {
 	return func(o *archiverOptions) error {
-		// Set a sensible default or store in options to apply later
-		// For now, let's use a temporary field in options if needed,
-		// but since it's most useful for solid, let's just make it a rule.
+		o.seekChunkSize = chunkSize
+		return nil
+	}
+}
+
+// WithArchiverPassword sets the password for WinZip AES encryption.
+func WithArchiverPassword(password string) ArchiverOption {
+	return func(o *archiverOptions) error {
+		o.password = password
+		return nil
+	}
+}
+
+// WithArchiverEncryptCD enables Central Directory Encryption (CDE).
+func WithArchiverEncryptCD(enable bool) ArchiverOption {
+	return func(o *archiverOptions) error {
+		o.encryptCD = enable
 		return nil
 	}
 }
@@ -162,6 +178,9 @@ func NewArchiver(w io.Writer, chroot string, opts ...ArchiverOption) (*Archiver,
 
 	a.zw = NewWriter(w)
 	a.zw.SetOffset(a.options.offset)
+	if a.options.encryptCD && a.options.password != "" {
+		a.zw.SetEncryptCentralDirectory(true, a.options.password)
+	}
 	return a, nil
 }
 
@@ -421,6 +440,9 @@ func (a *Archiver) fileInfoHeaderFast(name string, fi os.FileInfo, hdr *FileHead
 	} else {
 		hdr.UncompressedSize = uint32(hdr.UncompressedSize64)
 	}
+
+	hdr.SeekChunkSize = a.options.seekChunkSize
+	hdr.Password = a.options.password
 
 	// Respect archiver options for metadata
 	appendPlatformExtra(fi, hdr, a.options.includePlatformMetadata)

@@ -46,6 +46,15 @@ type extractorOptions struct {
 	numericOwner          bool
 	incremental           bool
 	tolerant              bool
+	password              string
+}
+
+// WithExtractorPassword sets the password for WinZip AES and CDE decryption.
+func WithExtractorPassword(password string) ExtractorOption {
+	return func(o *extractorOptions) error {
+		o.password = password
+		return nil
+	}
 }
 
 // WithExtractorSafeWrites extracts files atomically by writing to a temporary file and renaming (--safe-writes).
@@ -247,8 +256,17 @@ type Extractor struct {
 	chroot           string
 }
 
+func extractPasswordFromOpts(opts []ExtractorOption) string {
+	var o extractorOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o.password
+}
+
 func NewExtractor(filename, chroot string, opts ...ExtractorOption) (*Extractor, error) {
-	zr, err := OpenReader(filename)
+	password := extractPasswordFromOpts(opts)
+	zr, err := OpenReaderWithPassword(filename, password)
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +274,8 @@ func NewExtractor(filename, chroot string, opts ...ExtractorOption) (*Extractor,
 }
 
 func NewExtractorFromReader(r io.ReaderAt, size int64, chroot string, opts ...ExtractorOption) (*Extractor, error) {
-	zr, err := NewReader(r, size)
+	password := extractPasswordFromOpts(opts)
+	zr, err := NewReaderWithPassword(r, size, password)
 	if err != nil {
 		return nil, err
 	}
@@ -288,6 +307,9 @@ func newExtractor(r *Reader, c io.Closer, chroot string, opts []ExtractorOption)
 		if err := o(&e.options); err != nil {
 			return nil, err
 		}
+	}
+	if e.options.password != "" && e.zr != nil {
+		e.zr.SetPassword(e.options.password)
 	}
 	return e, nil
 }
