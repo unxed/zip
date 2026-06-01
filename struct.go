@@ -66,7 +66,7 @@ const (
 	//                      0x7813 // Reserved for further f4 extensions versions
 	//                      0x7814 // Reserved for further f4 extensions versions
 	//                      0x7815 // Reserved for further f4 extensions versions
-	//                      0x7816 // Reserved for further f4 extensions versions
+	//                      0x7816 // f4 extensions: ratarmount / FlatBuffers Seek Index [Draft]
 	solidSeekIndexExtraID = 0x7817 // f4 extensions: Solid Seek Index (ratarmount-like)
 	//                             // 0x7818..0x7854 unused
 	//                      0x7855 // Info-ZIP UNIX (new)

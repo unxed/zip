@@ -1,4 +1,4 @@
-# f4 ZIP Extensions Specification (Version 0.3)
+# f4 ZIP Extensions Specification (Version 0.4)
 
 ## 1. Abstract
 The **f4 ZIP Extensions** provide a set of additional metadata fields and conventions designed to enhance cross-platform file system fidelity within ZIP archives. These extensions were originally developed for `unxed/zip` golang library used in the **f4** — a cross-platform, asynchronous Far Manager clone.
@@ -34,19 +34,7 @@ Stores user and group names as UTF-8 strings. This complements the numeric UID/G
 **Methodological Recommendations:**
 - **Precedence:** On extraction, if the `Uname` exists on the local system, the archiver SHOULD prefer the local UID corresponding to that name over the numeric `Uid` stored in the archive.
 
-### 2.3. FlatBuffers Seek Index (Extra Field `0x7813`) [Draft]
-Provides a ratarmount-compatible (using the [FlatBuffers schema](https://github.com/mxmlnkn/ratarmount/issues/192)) seek index for a compressed stream (e.g., DEFLATE, ZSTD). Unlike the chunk-based index (`0x7817`), this field stores the complete decompressor state (such as the 32KB sliding window checkpoints for DEFLATE), permitting true random access without requiring the compression stream to be periodically flushed during creation.
-
-**Header ID:** `0x7813`
-**Data Layout:**
-- `[IndexLength]`: 4 bytes (Little Endian)
-- `[IndexData]`: `IndexLength` bytes FlatBuffers binary payload
-
-**Methodological Recommendations:**
-- **Usage**: Highly recommended when preserving the maximum compression ratio of the stream is critical, as it eliminates the need for periodic dictionary resets.
-- **Portability**: Implementers should ensure the target decompressor supports state-restoration APIs (e.g., `inflateSetDictionary` in zlib, or `flate.NewReaderDict` in Go).
-
-### 2.4. Solid ZIP-in-ZIP Packaging
+### 2.3. Solid ZIP-in-ZIP Packaging
 A convention where an uncompressed ZIP archive (using `Store` / Method 0 for all internal files) is bundled as a single compressed entry named `Solid.zip` inside an outer ZIP container.
 
 **Purpose:**
@@ -57,17 +45,20 @@ Provides "solid" compression (similar to `.tar.gz` or `.7z`) for a collection of
 - The outer entry (`Solid.zip`) MUST be compressed using a high-efficiency algorithm (e.g., `Deflate`, `Zstd`, `BZIP2`).
 - The inner archive (`Solid.zip`) MUST be a valid ZIP file where all files and metadata are stored uncompressed (using the `Store` method).
 
-### 2.5. Incremental Sync Support (`.zip_dumpdir`)
-A control file stored within the archive to facilitate "incremental restore" or "mirroring" behavior.
+### 2.4. ratarmount / FlatBuffers Seek Index (Extra Field `0x7816`) [Draft]
+Provides a ratarmount-compatible (using the [FlatBuffers schema](https://github.com/mxmlnkn/ratarmount/issues/192)) seek index for a compressed stream (e.g., DEFLATE, ZSTD). Unlike the chunk-based index (`0x7817`), this field stores the complete decompressor state (such as the 32KB sliding window checkpoints for DEFLATE), permitting true random access without requiring the compression stream to be periodically flushed during creation.
 
-**Path:** `.zip_dumpdir` (usually at the root or within the `Solid.zip`)
-**Format:** A UTF-8 text file containing a list of all active files and directories in the backup, one per line. Directories SHOULD end with a `/`.
+**Header ID:** `0x7816`
+**Data Layout:**
+- `[IndexLength]`: 4 bytes (Little Endian)
+- `[IndexData]`: `IndexLength` bytes FlatBuffers binary payload
 
-**Behavior:**
-During extraction with "incremental" mode enabled, any file present in the target directory but *NOT* listed in `.zip_dumpdir` SHOULD be deleted.
+**Methodological Recommendations:**
+- **Usage**: Highly recommended when preserving the maximum compression ratio of the stream is critical, as it eliminates the need for periodic dictionary resets.
+- **Portability**: Implementers should ensure the target decompressor supports state-restoration APIs (e.g., `inflateSetDictionary` in zlib, or `flate.NewReaderDict` in Go).
 
-### 2.6. Seek Index (Extra Field `0x7817`)
-To allow fast random access (similar to `ratarmount`) inside compressed streams (especially large files or `Solid.zip` containers), an entry MAY include a Seek Index extra field.
+### 2.5. Chunk-Based Index (Extra Field `0x7817`)
+Another way to allow fast random access inside compressed streams (especially large files or `Solid.zip` containers).
 
 **Header ID:** `0x7817`
 **Data Layout:**
@@ -81,6 +72,15 @@ To allow fast random access (similar to `ratarmount`) inside compressed streams 
 **Methodological Recommendations:**
 - When extracting a single file from `Solid.zip`, the extractor reads the inner Central Directory (located near the end of the uncompressed archive), finds the uncompressed offset of the target file, divides it by `ChunkSize` to find the block index, and uses `Offsets[block_index]` to jump directly to the required compressed block.
 - This requires the outer entry's compression method to support independent block decoding (e.g., Zstandard Seekable Format or chunked DEFLATE with full dictionary flushes).
+
+### 2.6. Incremental Sync Support (`.zip_dumpdir`)
+A control file stored within the archive to facilitate "incremental restore" or "mirroring" behavior.
+
+**Path:** `.zip_dumpdir` (usually at the root or within the `Solid.zip`)
+**Format:** A UTF-8 text file containing a list of all active files and directories in the backup, one per line. Directories SHOULD end with a `/`.
+
+**Behavior:**
+During extraction with "incremental" mode enabled, any file present in the target directory but *NOT* listed in `.zip_dumpdir` SHOULD be deleted.
 
 ## 3. Guidelines for Archiver Developers
 1. **Path Normalization:** Always use `/` as the path separator in `0x7811` keys and filenames, regardless of the host OS.
