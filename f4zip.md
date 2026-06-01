@@ -34,7 +34,19 @@ Stores user and group names as UTF-8 strings. This complements the numeric UID/G
 **Methodological Recommendations:**
 - **Precedence:** On extraction, if the `Uname` exists on the local system, the archiver SHOULD prefer the local UID corresponding to that name over the numeric `Uid` stored in the archive.
 
-### 2.3. Solid ZIP-in-ZIP Packaging
+### 2.3. FlatBuffers Seek Index (Extra Field `0x7813`) [Draft]
+Provides a ratarmount-compatible (using the [FlatBuffers schema](https://github.com/mxmlnkn/ratarmount/issues/192)) seek index for a compressed stream (e.g., DEFLATE, ZSTD). Unlike the chunk-based index (`0x7817`), this field stores the complete decompressor state (such as the 32KB sliding window checkpoints for DEFLATE), permitting true random access without requiring the compression stream to be periodically flushed during creation.
+
+**Header ID:** `0x7813`
+**Data Layout:**
+- `[IndexLength]`: 4 bytes (Little Endian)
+- `[IndexData]`: `IndexLength` bytes FlatBuffers binary payload
+
+**Methodological Recommendations:**
+- **Usage**: Highly recommended when preserving the maximum compression ratio of the stream is critical, as it eliminates the need for periodic dictionary resets.
+- **Portability**: Implementers should ensure the target decompressor supports state-restoration APIs (e.g., `inflateSetDictionary` in zlib, or `flate.NewReaderDict` in Go).
+
+### 2.4. Solid ZIP-in-ZIP Packaging
 A convention where an uncompressed ZIP archive (using `Store` / Method 0 for all internal files) is bundled as a single compressed entry named `Solid.zip` inside an outer ZIP container.
 
 **Purpose:**
@@ -45,7 +57,7 @@ Provides "solid" compression (similar to `.tar.gz` or `.7z`) for a collection of
 - The outer entry (`Solid.zip`) MUST be compressed using a high-efficiency algorithm (e.g., `Deflate`, `Zstd`, `BZIP2`).
 - The inner archive (`Solid.zip`) MUST be a valid ZIP file where all files and metadata are stored uncompressed (using the `Store` method).
 
-### 2.4. Incremental Sync Support (`.zip_dumpdir`)
+### 2.5. Incremental Sync Support (`.zip_dumpdir`)
 A control file stored within the archive to facilitate "incremental restore" or "mirroring" behavior.
 
 **Path:** `.zip_dumpdir` (usually at the root or within the `Solid.zip`)
@@ -53,7 +65,8 @@ A control file stored within the archive to facilitate "incremental restore" or 
 
 **Behavior:**
 During extraction with "incremental" mode enabled, any file present in the target directory but *NOT* listed in `.zip_dumpdir` SHOULD be deleted.
-### 2.5. Seek Index (Extra Field `0x7817`)
+
+### 2.6. Seek Index (Extra Field `0x7817`)
 To allow fast random access (similar to `ratarmount`) inside compressed streams (especially large files or `Solid.zip` containers), an entry MAY include a Seek Index extra field.
 
 **Header ID:** `0x7817`
