@@ -40,14 +40,14 @@ It combines the stability of the standard library with the best open-source ZIP 
 | Feature | `unxed/tar` | `unxed/zip` |
 | :--- | :--- | :--- |
 | **NTFS ACLs** (Win) | `Get/SetFileSecurityW` \| PAX `MSWINDOWS.raw_sd` | `Get/SetFileSecurityW` \| Extra Field `0x4453` |
-| **Alternative Data Streams** (Win) | `Find*StreamW` \| Virtual files | `Find*StreamW` \| Virtual files |
-| **xattrs / POSIX ACLs** (*nix) | `Lget/setxattr`, `Extattr*` \| PAX `SCHILY.xattr` | `Lget/setxattr`, `Extattr*` \| Extra Field `0x7811` |
+| **Alternative Data Streams** (Win) | `Find*StreamW` \| Virtual files (`file:stream`) | `Find*StreamW` \| Virtual files (`file:stream`) |
+| **High-precision Timestamps** (Win/*nix) | `unix.Lutimes` \| PAX float64 UnixNano | `unix.Lutimes` / `Chtimes` \| Extra Fields `0x000a` / `0x5455` |
 | **Symlinks** (Win/*nix) | `os.Symlink` \| TAR Typeflag `2` | `os.Symlink` \| Mode flag + File payload |
-| **Hardlinks** (*nix) | `os.Link` \| TAR Typeflag `1` | `os.Link` \| `Store` method + Extra `0x000d` |
+| **Hardlinks** (*nix) | `os.Link` \| TAR Typeflag `1` | `os.Link` \| `Store` method + Extra Field `0x000d` |
 | **Special Files (Devices/FIFOs)** (*nix) | `unix.Mknod` \| TAR Typeflag `3`/`4`/`6` | `unix.Mknod` \| Extra Field `0x000d` |
 | **Owner UID/GID** (*nix) | `os.Lchown` \| TAR header fields | `os.Lchown` \| Extra Field `0x7875` |
-| **Owner and Group Names** (*nix) | `os.Lchown` \| TAR header fields | `os.Lchown` \| Extra Field `0x7817` |
-| **Timestamps (atime/mtime/ctime)** (*nix) | `unix.Lutimes` \| TAR header / PAX | `unix.Lutimes` \| Extra Field `0x5455` |
+| **Owner/Group Names** (*nix) | `os.Lchown` \| TAR header fields | `os.Lchown` \| Extra Field `0x7817` |
+| **xattrs / POSIX ACLs** (*nix) | `Lget/setxattr`, `Extattr*` \| PAX `SCHILY.xattr` | `Lget/setxattr`, `Extattr*` \| Extra Field `0x7811` |
 
 ## Usage
 
