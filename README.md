@@ -37,6 +37,18 @@ It combines the stability of the standard library with the best open-source ZIP 
 
 *   **Multi-Volume Support:** Transparently read split ZIP archives (e.g., `archive.z01`, `archive.z02`, ..., `archive.zip`).
 
+| Feature | `unxed/tar` | `unxed/zip` |
+| :--- | :--- | :--- |
+| **NTFS ACLs** (Win) | `Get/SetFileSecurityW` \| PAX `MSWINDOWS.raw_sd` | `Get/SetFileSecurityW` \| Extra Field `0x4453` |
+| **Alternative Data Streams** (Win) | `Find*StreamW` \| Virtual files | `Find*StreamW` \| Virtual files |
+| **xattrs / POSIX ACLs** (*nix) | `Lget/setxattr`, `Extattr*` \| PAX `SCHILY.xattr` | `Lget/setxattr`, `Extattr*` \| Extra Field `0x7811` |
+| **Symlinks** (Win/*nix) | `os.Symlink` \| TAR Typeflag `2` | `os.Symlink` \| Mode flag + File payload |
+| **Hardlinks** (*nix) | `os.Link` \| TAR Typeflag `1` | `os.Link` \| `Store` method + Extra `0x000d` |
+| **Special Files (Devices/FIFOs)** (*nix) | `unix.Mknod` \| TAR Typeflag `3`/`4`/`6` | `unix.Mknod` \| Extra Field `0x000d` |
+| **Owner UID/GID** (*nix) | `os.Lchown` \| TAR header fields | `os.Lchown` \| Extra Field `0x7875` |
+| **Owner and Group Names** (*nix) | `os.Lchown` \| TAR header fields | `os.Lchown` \| Extra Field `0x7817` |
+| **Timestamps (atime/mtime/ctime)** (*nix) | `unix.Lutimes` \| TAR header / PAX | `unix.Lutimes` \| Extra Field `0x5455` |
+
 ## Usage
 
 ### 1. Standard Drop-in Usage
