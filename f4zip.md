@@ -45,35 +45,22 @@ Provides "solid" compression (similar to `.tar.gz` or `.7z`) for a collection of
 - The outer entry (`Solid.zip`) MUST be compressed using a high-efficiency algorithm (e.g., `Deflate`, `Zstd`, `BZIP2`).
 - The inner archive (`Solid.zip`) MUST be a valid ZIP file where all files and metadata are stored uncompressed (using the `Store` method).
 
-### 2.4. ratarmount / FlatBuffers Seek Index (Extra Field `0x7816`) [Draft]
-Provides a ratarmount-compatible (using the [FlatBuffers schema](https://github.com/mxmlnkn/ratarmount/issues/192)) seek index for a compressed stream (e.g., DEFLATE, ZSTD). Unlike the chunk-based index (`0x7817`), this field stores the complete decompressor state (such as the 32KB sliding window checkpoints for DEFLATE), permitting true random access without requiring the compression stream to be periodically flushed during creation.
+### 2.4. Random Access Indexes (SOZip & Hidden Files)
 
-**Header ID:** `0x7816`
-**Data Layout:**
-- `[IndexLength]`: 4 bytes (Little Endian)
-- `[IndexData]`: `IndexLength` bytes FlatBuffers binary payload
+f4 adopts the **SOZip (Seek-Optimized ZIP)** methodology for random access:
 
-**Methodological Recommendations:**
-- **Usage**: Highly recommended when preserving the maximum compression ratio of the stream is critical, as it eliminates the need for periodic dictionary resets.
-- **Portability**: Implementers should ensure the target decompressor supports state-restoration APIs (e.g., `inflateSetDictionary` in zlib, or `flate.NewReaderDict` in Go).
+#### 2.4.1 Chunk-Based Deflate (SOZip Standard)
+For chunked streams (where the decompressor state is periodically flushed using `Z_FULL_FLUSH`), implementations MUST follow the official [SOZip specification](https://github.com/sozip/sozip-spec).
+- The index is stored as an uncompressed, hidden file named `.${filename}.sozip.idx` placed immediately after the compressed file data.
+- The hidden file contains a Local File Header but is **intentionally omitted** from the Central Directory to remain invisible to non-SOZip-aware archivers.
 
-### 2.5. Chunk-Based Index (Extra Field `0x7817`)
-Another way to allow fast random access inside compressed streams (especially large files or `Solid.zip` containers).
+#### 2.4.2 Stateful Zran/FlatBuffers Index
+For streams where maximal compression is preserved (no dictionary flushing), true random access requires storing the decompressor state (e.g., the 32KB dictionary window for DEFLATE).
+- Following the SOZip pattern, this index MUST be stored as a hidden file named `.${filename}.gzidx` immediately following the compressed data.
+- The file contains a Local File Header but NO Central Directory entry.
+- The payload is a `ratarmount`-compatible binary payload (GZIDX) allowing the decompressor to reconstruct its exact state at specific offsets.
 
-**Header ID:** `0x7817`
-**Data Layout:**
-- `[ChunkSize]`: 4 bytes (Little Endian, uncompressed block size, e.g., 1MB).
-- `[Offsets...]`: Array of 8-byte (Little Endian) integers representing the **relative byte offset** from the beginning of the compressed data stream (immediately after the local header) to the start of each uncompressed chunk.
-
-**Implementation Details:**
-- The first offset in the array MUST be `0`.
-- Each subsequent offset points to a synchronization point in the compression stream where the decompressor state has been flushed (e.g., using `Z_FULL_FLUSH` in Deflate or similar mechanisms).
-
-**Methodological Recommendations:**
-- When extracting a single file from `Solid.zip`, the extractor reads the inner Central Directory (located near the end of the uncompressed archive), finds the uncompressed offset of the target file, divides it by `ChunkSize` to find the block index, and uses `Offsets[block_index]` to jump directly to the required compressed block.
-- This requires the outer entry's compression method to support independent block decoding (e.g., Zstandard Seekable Format or chunked DEFLATE with full dictionary flushes).
-
-### 2.6. Incremental Sync Support (`.zip_dumpdir`)
+### 2.5. Incremental Sync Support (`.zip_dumpdir`)
 A control file stored within the archive to facilitate "incremental restore" or "mirroring" behavior.
 
 **Path:** `.zip_dumpdir` (usually at the root or within the `Solid.zip`)

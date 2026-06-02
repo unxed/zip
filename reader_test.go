@@ -3,11 +3,12 @@ package zip
 import (
 	"bytes"
 	"encoding/binary"
-    "path/filepath"
 	"errors"
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -276,6 +277,42 @@ func TestFile_OpenNilSafety(t *testing.T) {
 	_, err := f.Open()
 	if !errors.Is(err, os.ErrInvalid) {
 		t.Errorf("expected ErrInvalid for nil file, got %v", err)
+	}
+}
+
+func TestHiddenIndex_Corruptions(t *testing.T) {
+	buf := new(bytes.Buffer)
+	zw := NewWriter(buf)
+
+	fh := &FileHeader{
+		Name:           "corrupt.txt",
+		Method:         Deflate,
+		SeekChunkSize:  1024,
+		SeekContinuous: true,
+	}
+	w, _ := zw.CreateHeader(fh)
+	w.Write(bytes.Repeat([]byte("A"), 4096))
+	zw.Close()
+
+	raw := buf.Bytes()
+
+	idx := bytes.Index(raw, []byte("GZIDX"))
+	if idx != -1 {
+		binary.LittleEndian.PutUint32(raw[idx+31:idx+35], 10000)
+	} else {
+		t.Fatal("GZIDX hidden index not found in generated zip")
+	}
+
+	zr, err := NewReader(bytes.NewReader(raw), int64(len(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = zr.File[0].OpenSeekable()
+	if err == nil {
+		t.Error("expected error due to corrupted GZIDX index, got nil")
+	} else if !strings.Contains(err.Error(), "invalid GZIDX payload (too short") {
+		t.Errorf("expected specific payload length error, got: %v", err)
 	}
 }
 

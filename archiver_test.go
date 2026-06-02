@@ -380,3 +380,57 @@ func (m mockFileInfo) Mode() os.FileMode { return m.mode }
 func (m mockFileInfo) ModTime() time.Time { return time.Now() }
 func (m mockFileInfo) IsDir() bool { return m.mode.IsDir() }
 func (m mockFileInfo) Sys() interface{} { return nil }
+
+func TestArchiver_SolidSeekIndex(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "src")
+	os.MkdirAll(srcDir, 0755)
+	os.WriteFile(filepath.Join(srcDir, "test.txt"), []byte("solid seek index test data"), 0644)
+
+	archivePath := filepath.Join(tmpDir, "solid.zip")
+	f, _ := os.Create(archivePath)
+
+	a, err := NewArchiver(f, srcDir,
+		WithArchiverSolid(true),
+		WithArchiverMethod(Deflate),
+		WithArchiverSeekIndex(1024, true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	files := make(map[string]os.FileInfo)
+	filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
+		if path != srcDir {
+			files[path] = info
+		}
+		return nil
+	})
+
+	if err := a.Archive(context.Background(), files); err != nil {
+		t.Fatal(err)
+	}
+	a.Close()
+	f.Close()
+
+	zr, err := OpenReader(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zr.Close()
+
+	if len(zr.File) != 1 || zr.File[0].Name != "Solid.zip" {
+		t.Fatalf("Expected Solid.zip, got %v", zr.File[0].Name)
+	}
+
+	rs, err := zr.File[0].OpenSeekable()
+	if err != nil {
+		t.Fatalf("OpenSeekable failed on Solid archive: %v", err)
+	}
+
+	buf := make([]byte, 5)
+	n, _ := rs.Read(buf)
+	if n == 0 {
+		t.Fatalf("Read from seekable stream failed")
+	}
+}

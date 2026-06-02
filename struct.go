@@ -66,9 +66,7 @@ const (
 	//                      0x7813 // Reserved for further f4 extensions versions
 	//                      0x7814 // Reserved for further f4 extensions versions
 	//                      0x7815 // Reserved for further f4 extensions versions
-	//                      0x7816 // f4 extensions: ratarmount / FlatBuffers Seek Index [Draft]
-	solidSeekIndexExtraID = 0x7817 // f4 extensions: Solid Seek Index (ratarmount-like)
-	//                             // 0x7818..0x7854 unused
+	//                             // 0x7816..0x7854 unused (0x7816/0x7817 deprecated in favor of SOZip hidden files)
 	//                      0x7855 // Info-ZIP UNIX (new)
 	//                      0x7875 // Info-ZIP UNIX (newer UID/GID)
 	winzipAesExtraID      = 0x9901 // WinZip AES encryption extra field
@@ -94,6 +92,14 @@ const (
 // include OS-specific metadata (like UID/GID on Unix).
 // Enabled by default to match system archivers behavior.
 var ConfigIncludePlatformMetadata = true
+
+type gzPoint struct {
+	compOffset   uint64
+	uncompOffset uint64
+	bits         uint8
+	hasData      uint8
+	window       []byte
+}
 
 // FileHeader describes a file within a ZIP file.
 type FileHeader struct {
@@ -131,9 +137,11 @@ type FileHeader struct {
 	// NTFS Attributes
 	Acl      []byte // Windows Security Descriptor (ACL)
 
-	// Seek Index (f4 extension 0x7817)
-	SeekChunkSize uint32   // Uncompressed block size (e.g. 1MB)
-	SeekIndex     []uint64 // Compressed offsets for each block
+	// Seek Index (SOZip / GZIDX Hidden files)
+	SeekChunkSize  uint32    // Uncompressed block size (e.g. 1MB)
+	SeekIndex      []uint64  // SOZip compressed offsets
+	GzidxPoints    []gzPoint // GZIDX stateful points
+	SeekContinuous bool      // If true, generate GZIDX instead of SOZip
 
 	// WinZip AES encryption
 	Password    string
@@ -281,6 +289,7 @@ func (fh *FileHeader) injectAutoExtras() uint16 {
 		return -1, 0
 	}
 
+    /*
 	removeTag := func(id uint16) {
 		off, size := findTag(id)
 		if off >= 0 {
@@ -290,6 +299,7 @@ func (fh *FileHeader) injectAutoExtras() uint16 {
 			fh.Extra = newExtra
 		}
 	}
+    */
 
 	hasTag := func(id uint16) bool {
 		off, _ := findTag(id)
@@ -336,21 +346,6 @@ func (fh *FileHeader) injectAutoExtras() uint16 {
 	// 3.4 Unix Owner/Group Strings (0x7812)
 	if (fh.Uname != "" || fh.Gname != "") && !hasTag(unixOwnerNameExtraID) {
 		fh.Extra = appendUnixOwnerNamesExtra(fh.Extra, fh.Uname, fh.Gname)
-	}
-
-	// 3.5 Seek Index (0x7817) - Always replace with latest version if index grew
-	if len(fh.SeekIndex) > 0 && fh.SeekChunkSize > 0 {
-		removeTag(solidSeekIndexExtraID)
-		size := uint16(4 + len(fh.SeekIndex)*8)
-		buf := make([]byte, 4+size)
-		eb := writeBuf(buf)
-		eb.uint16(solidSeekIndexExtraID)
-		eb.uint16(size)
-		eb.uint32(fh.SeekChunkSize)
-		for _, off := range fh.SeekIndex {
-			eb.uint64(off)
-		}
-		fh.Extra = append(fh.Extra, buf...)
 	}
 
 	// 4. AES Encryption (0x9901)

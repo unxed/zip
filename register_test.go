@@ -137,79 +137,69 @@ func TestZstd_WithDataDescriptor(t *testing.T) {
 	}
 }
 func TestSolidSeekIndex_RandomAccess(t *testing.T) {
-	// Create a repetitive data set with cross-chunk patterns to test ResetDict seeking
-	chunkSize := uint32(1024)
-	numChunks := 5
-	var fullData bytes.Buffer
-	for i := 0; i < numChunks; i++ {
-		// The pattern "ABCDEFGH..." repeats across chunks. Without ResetDict, 
-		// jumping to block 3 will fail because it expects back-references from previous blocks.
-		block := make([]byte, chunkSize)
-		for j := 0; j < int(chunkSize); j++ {
-			block[j] = byte('A' + ((i*int(chunkSize) + j) % 26))
+	for _, continuous := range []bool{false, true} {
+		chunkSize := uint32(1024)
+		numChunks := 5
+		var fullData bytes.Buffer
+		for i := 0; i < numChunks; i++ {
+			block := make([]byte, chunkSize)
+			for j := 0; j < int(chunkSize); j++ {
+				block[j] = byte('A' + ((i*int(chunkSize) + j) % 26))
+			}
+			fullData.Write(block)
 		}
-		fullData.Write(block)
-	}
 
-	buf := new(bytes.Buffer)
-	zw := NewWriter(buf)
+		buf := new(bytes.Buffer)
+		zw := NewWriter(buf)
 
-	fh := &FileHeader{
-		Name:               "seekable.bin",
-		Method:             Deflate,
-		SeekChunkSize:      chunkSize,
-		UncompressedSize64: uint64(fullData.Len()),
-	}
+		fh := &FileHeader{
+			Name:               "seekable.bin",
+			Method:             Deflate,
+			SeekChunkSize:      chunkSize,
+			SeekContinuous:     continuous,
+			UncompressedSize64: uint64(fullData.Len()),
+		}
 
-	w, _ := zw.CreateHeader(fh)
-	w.Write(fullData.Bytes())
-	zw.Close()
+		w, _ := zw.CreateHeader(fh)
+		w.Write(fullData.Bytes())
+		zw.Close()
 
-	// Read and verify seek index
-	zr, err := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
-	if err != nil {
-		t.Fatal(err)
-	}
+		zr, err := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
 
-	f := zr.File[0]
-	if f.SeekChunkSize != chunkSize {
-		t.Errorf("expected chunk size %d, got %d", chunkSize, f.SeekChunkSize)
-	}
-	if len(f.SeekIndex) != numChunks {
-		t.Errorf("expected %d index entries, got %d", numChunks, len(f.SeekIndex))
-	}
+		f := zr.File[0]
+		rs, err := f.OpenSeekable()
+		if err != nil {
+			t.Fatalf("failed to open seekable (continuous=%v): %v", continuous, err)
+		}
 
-	rs, err := f.OpenSeekable()
-	if err != nil {
-		t.Fatalf("failed to open seekable: %v", err)
-	}
+		targetOff := int64(chunkSize * 3)
+		rs.Seek(targetOff, io.SeekStart)
 
-	// 1. Seek to block 3 
-	targetOff := int64(chunkSize * 3)
-	rs.Seek(targetOff, io.SeekStart)
+		out := make([]byte, 10)
+		io.ReadFull(rs, out)
+		// For block 3 (start index 3072), 3072 % 26 = 4 ('E')
+		if string(out) != "EFGHIJKLMN" {
+			t.Errorf("seek to block 3 failed, got %q (continuous=%v)", string(out), continuous)
+		}
 
-	out := make([]byte, 10)
-	io.ReadFull(rs, out)
-	// For block 3 (start index 3072), 3072 % 26 = 4 ('E')
-	if string(out) != "EFGHIJKLMN" {
-		t.Errorf("seek to block 3 failed, got %q", string(out))
-	}
+		rs.Seek(int64(chunkSize), io.SeekStart)
+		io.ReadFull(rs, out)
+		// For block 1 (start index 1024), 1024 % 26 = 10 ('K')
+		if string(out) != "KLMNOPQRST" {
+			t.Errorf("seek to block 1 failed, got %q (continuous=%v)", string(out), continuous)
+		}
 
-	// 2. Seek back to block 1
-	rs.Seek(int64(chunkSize), io.SeekStart)
-	io.ReadFull(rs, out)
-	// For block 1 (start index 1024), 1024 % 26 = 10 ('K')
-	if string(out) != "KLMNOPQRST" {
-		t.Errorf("seek to block 1 failed, got %q", string(out))
-	}
-
-	// 3. Test EOF
-	rs.Seek(0, io.SeekEnd)
-	n, err := rs.Read(out)
-	if n != 0 || err != io.EOF {
-		t.Errorf("expected EOF at end of file, got n=%d, err=%v", n, err)
+		rs.Seek(0, io.SeekEnd)
+		n, err := rs.Read(out)
+		if n != 0 || err != io.EOF {
+			t.Errorf("expected EOF at end of file, got n=%d, err=%v", n, err)
+		}
 	}
 }
+
 func TestRegister_Panics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {

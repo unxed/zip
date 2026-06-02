@@ -42,6 +42,7 @@ type archiverOptions struct {
 	solid                   bool
 	incremental             bool
 	seekChunkSize           uint32
+	seekContinuous          bool
 	password                string
 	encryptCD               bool
 }
@@ -112,9 +113,10 @@ func WithArchiverSolid(b bool) ArchiverOption {
 }
 
 // WithArchiverSeekIndex enables generation of a Seek Index for large files or solid archives.
-func WithArchiverSeekIndex(chunkSize uint32) ArchiverOption {
+func WithArchiverSeekIndex(chunkSize uint32, continuous bool) ArchiverOption {
 	return func(o *archiverOptions) error {
 		o.seekChunkSize = chunkSize
+		o.seekContinuous = continuous
 		return nil
 	}
 }
@@ -194,10 +196,15 @@ func (a *Archiver) Written() (bytes, entries int64) {
 
 func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (err error) {
 	if a.options.solid {
+		seekChunk := a.options.seekChunkSize
+		if seekChunk == 0 {
+			seekChunk = 1024 * 1024 // 1MB default
+		}
 		hdr := &FileHeader{
-			Name:          "Solid.zip",
-			Method:        a.options.method,
-			SeekChunkSize: 1024 * 1024, // Enable 1MB Seek Index for solid archives
+			Name:           "Solid.zip",
+			Method:         a.options.method,
+			SeekChunkSize:  seekChunk,
+			SeekContinuous: a.options.seekContinuous,
 		}
 		hdr.SetMode(0644)
 
@@ -442,6 +449,7 @@ func (a *Archiver) fileInfoHeaderFast(name string, fi os.FileInfo, hdr *FileHead
 	}
 
 	hdr.SeekChunkSize = a.options.seekChunkSize
+	hdr.SeekContinuous = a.options.seekContinuous
 	hdr.Password = a.options.password
 
 	// Respect archiver options for metadata

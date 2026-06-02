@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/klauspost/compress/flate"
 	"github.com/unxed/zipcharset"
 )
 
@@ -375,10 +377,97 @@ func (f *File) OpenRaw() (io.Reader, error) {
 	return r, nil
 }
 
+func (f *File) findHiddenIndex() (int, []byte, error) {
+	bodyOffset, err := f.findBodyOffset()
+	if err != nil {
+		return 0, nil, err
+	}
+
+	endOffset := f.headerOffset + bodyOffset + int64(f.CompressedSize64)
+	if f.hasDataDescriptor() {
+		if f.zip64 {
+			endOffset += dataDescriptor64Len
+		} else {
+			endOffset += dataDescriptorLen
+		}
+	}
+
+	var sigBuf [4]byte
+	if _, err := f.zipr.ReadAt(sigBuf[:], endOffset); err != nil {
+		return 0, nil, nil
+	}
+	if binary.LittleEndian.Uint32(sigBuf[:]) != fileHeaderSignature {
+		return 0, nil, nil
+	}
+
+	headerBuf := make([]byte, fileHeaderLen)
+	if _, err := f.zipr.ReadAt(headerBuf, endOffset); err != nil {
+		return 0, nil, nil
+	}
+
+	b := readBuf(headerBuf[4:])
+	_ = b.uint16() // ReaderVersion / Version needed to extract (2 bytes)
+	flags := b.uint16()
+	method := b.uint16()
+	_ = b.uint16() // ModifiedTime
+	_ = b.uint16() // ModifiedDate
+	_ = b.uint32() // CRC32
+	compSize := b.uint32()
+	_ = b.uint32() // UncompressedSize
+	filenameLen := int(b.uint16())
+	extraLen := int(b.uint16())
+
+	if method != Store {
+		return 0, nil, nil
+	}
+
+	nameBuf := make([]byte, filenameLen)
+	if _, err := f.zipr.ReadAt(nameBuf, endOffset+fileHeaderLen); err != nil {
+		return 0, nil, err
+	}
+	hiddenName := string(nameBuf)
+	// Masked hidden name if CDE is used
+	if flags&0x2000 != 0 {
+		return 0, nil, nil
+	}
+
+	dir, name := path.Split(f.Name)
+	if hiddenName != dir+"."+name+".sozip.idx" && hiddenName != dir+"."+name+".gzidx" {
+		return 0, nil, nil
+	}
+
+	idxType := 1
+	if strings.HasSuffix(hiddenName, ".gzidx") {
+		idxType = 2
+	}
+
+	compSize64 := uint64(compSize)
+	if compSize == uint32max {
+		extraBuf := make([]byte, extraLen)
+		f.zipr.ReadAt(extraBuf, endOffset+fileHeaderLen+int64(filenameLen))
+		for eb := readBuf(extraBuf); len(eb) >= 4; {
+			tag := eb.uint16()
+			sz := int(eb.uint16())
+			if tag == zip64ExtraID && sz >= 8 {
+				_ = eb.uint64()
+				compSize64 = eb.uint64()
+				break
+			}
+			eb = eb[sz:]
+		}
+	}
+
+	dataOffset := endOffset + fileHeaderLen + int64(filenameLen) + int64(extraLen)
+	payload := make([]byte, compSize64)
+	if _, err := f.zipr.ReadAt(payload, dataOffset); err != nil {
+		return 0, nil, err
+	}
+
+	return idxType, payload, nil
+}
+
 // OpenSeekable returns a ReadSeeker for the file content.
-// It requires a Seek Index (0x7817) to be present in the archive for compressed files.
-// If the index is missing, it will return an error for compressed files.
-// For Uncompressed (Store) files, it works natively.
+// It requires a Seek Index (Hidden SOZip or GZIDX) to be present in the archive for compressed files.
 func (f *File) OpenSeekable() (io.ReadSeeker, error) {
 	if f.Method == Store {
 		bodyOffset, err := f.findBodyOffset()
@@ -388,17 +477,78 @@ func (f *File) OpenSeekable() (io.ReadSeeker, error) {
 		return io.NewSectionReader(f.zipr, f.headerOffset+bodyOffset, int64(f.UncompressedSize64)), nil
 	}
 
-	if len(f.SeekIndex) == 0 || f.SeekChunkSize == 0 {
+	idxType, payload, err := f.findHiddenIndex()
+	if err != nil {
+		return nil, err
+	}
+
+	if idxType == 0 {
 		return nil, errors.New("zip: seek index missing or invalid for compressed file")
 	}
 
-	return &solidReadSeeker{f: f}, nil
+	if idxType == 1 { // SOZip
+		if len(payload) < 32 {
+			return nil, errors.New("zip: invalid SOZip index length")
+		}
+		chunkSize := binary.LittleEndian.Uint32(payload[8:12])
+		offsetSize := binary.LittleEndian.Uint32(payload[12:16])
+		if offsetSize != 8 {
+			return nil, errors.New("zip: unsupported SOZip offset size")
+		}
+
+		f.SeekChunkSize = chunkSize
+		f.SeekIndex = []uint64{0}
+
+		offsetData := payload[32:]
+		for len(offsetData) >= 8 {
+			f.SeekIndex = append(f.SeekIndex, binary.LittleEndian.Uint64(offsetData[:8]))
+			offsetData = offsetData[8:]
+		}
+
+		return &solidReadSeeker{f: f}, nil
+	}
+
+	if idxType == 2 { // GZIDX
+		if len(payload) < 35 || string(payload[:5]) != "GZIDX" {
+			return nil, errors.New("zip: invalid GZIDX payload")
+		}
+		chunkSize := binary.LittleEndian.Uint32(payload[23:27])
+		numPoints := binary.LittleEndian.Uint32(payload[31:35])
+
+		if 35+int(numPoints)*18 > len(payload) {
+			return nil, errors.New("zip: invalid GZIDX payload (too short for points)")
+		}
+
+		f.SeekChunkSize = chunkSize
+		f.GzidxPoints = make([]gzPoint, numPoints)
+		offset := 35
+		for i := 0; i < int(numPoints); i++ {
+			f.GzidxPoints[i].compOffset = binary.LittleEndian.Uint64(payload[offset:])
+			f.GzidxPoints[i].uncompOffset = binary.LittleEndian.Uint64(payload[offset+8:])
+			f.GzidxPoints[i].bits = payload[offset+16]
+			f.GzidxPoints[i].hasData = payload[offset+17]
+			offset += 18
+		}
+		for i := 0; i < int(numPoints); i++ {
+			if f.GzidxPoints[i].hasData == 1 {
+				if offset+32768 > len(payload) {
+					return nil, errors.New("zip: invalid GZIDX payload (truncated window data)")
+				}
+				f.GzidxPoints[i].window = payload[offset : offset+32768]
+				offset += 32768
+			}
+		}
+		return &solidReadSeeker{f: f, isContinuous: true}, nil
+	}
+
+	return nil, errors.New("zip: seek index missing")
 }
 
 type solidReadSeeker struct {
-	f      *File
-	off    int64
-	currRC io.ReadCloser
+	f            *File
+	off          int64
+	currRC       io.ReadCloser
+	isContinuous bool
 }
 
 func (s *solidReadSeeker) Seek(offset int64, whence int) (int64, error) {
@@ -428,34 +578,69 @@ func (s *solidReadSeeker) Read(p []byte) (int, error) {
 	}
 
 	if s.currRC == nil {
-		blockIdx := s.off / int64(s.f.SeekChunkSize)
-		if blockIdx >= int64(len(s.f.SeekIndex)) {
-			return 0, io.EOF
+		var compOffset int64
+		var uncompOffset int64
+
+		if s.isContinuous {
+			var best *gzPoint
+			for i := range s.f.GzidxPoints {
+				pt := &s.f.GzidxPoints[i]
+				if int64(pt.uncompOffset) <= s.off {
+					if best == nil || pt.uncompOffset > best.uncompOffset {
+						best = pt
+					}
+				}
+			}
+			if best == nil {
+				return 0, io.EOF
+			}
+			compOffset = int64(best.compOffset)
+			uncompOffset = int64(best.uncompOffset)
+		} else {
+			blockIdx := s.off / int64(s.f.SeekChunkSize)
+			if blockIdx >= int64(len(s.f.SeekIndex)) {
+				return 0, io.EOF
+			}
+			compOffset = int64(s.f.SeekIndex[blockIdx])
+			uncompOffset = blockIdx * int64(s.f.SeekChunkSize)
 		}
 
-		compOffset := int64(s.f.SeekIndex[blockIdx])
 		bodyOffset, err := s.f.findBodyOffset()
 		if err != nil {
 			return 0, err
 		}
 
-		// WinZip AES or regular? 
-		// Note: Seeking inside AES streams is complex due to CTR state,
-		// but since we Flush the compressor, we assume we reset the state at block boundaries.
-		
 		totalCompSize := int64(s.f.CompressedSize64)
 		remainingComp := totalCompSize - compOffset
-		
-		section := io.NewSectionReader(s.f.zipr, s.f.headerOffset+bodyOffset+compOffset, remainingComp)
-		
-		dcomp := s.f.zip.decompressor(s.f.Method)
-		if dcomp == nil {
-			return 0, ErrAlgorithm
-		}
-		s.currRC = dcomp(section)
 
-		// Skip bytes within the block
-		skip := s.off % int64(s.f.SeekChunkSize)
+		section := io.NewSectionReader(s.f.zipr, s.f.headerOffset+bodyOffset+compOffset, remainingComp)
+
+		if s.isContinuous {
+			var best *gzPoint
+			for i := range s.f.GzidxPoints {
+				if int64(s.f.GzidxPoints[i].uncompOffset) == uncompOffset {
+					best = &s.f.GzidxPoints[i]
+					break
+				}
+			}
+			if best != nil && best.hasData == 1 {
+				s.currRC = flate.NewReaderDict(section, best.window)
+			} else {
+				dcomp := s.f.zip.decompressor(s.f.Method)
+				if dcomp == nil {
+					return 0, ErrAlgorithm
+				}
+				s.currRC = dcomp(section)
+			}
+		} else {
+			dcomp := s.f.zip.decompressor(s.f.Method)
+			if dcomp == nil {
+				return 0, ErrAlgorithm
+			}
+			s.currRC = dcomp(section)
+		}
+
+		skip := s.off - uncompOffset
 		if skip > 0 {
 			if _, err := io.CopyN(io.Discard, s.currRC, skip); err != nil {
 				return 0, err
@@ -772,19 +957,6 @@ parseExtras:
 				}
 				v := string(fieldBuf.sub(vlen))
 				f.Xattrs[k] = v
-			}
-
-		case solidSeekIndexExtraID:
-			if len(fieldBuf) < 4 {
-				continue parseExtras
-			}
-			f.SeekChunkSize = fieldBuf.uint32()
-			n := len(fieldBuf) / 8
-			if n > 0 {
-				f.SeekIndex = make([]uint64, n)
-				for i := 0; i < n; i++ {
-					f.SeekIndex[i] = fieldBuf.uint64()
-				}
 			}
 		}
 	}

@@ -1,6 +1,7 @@
 package zip
 
 import (
+    "path"
 	"bufio"
 	"encoding/binary"
 	"bytes"
@@ -72,6 +73,8 @@ type chunkSeekWriter struct {
 	written    uint32
 	dataStart  int64
 	totalWrite int64
+	continuous bool
+	window     []byte
 }
 
 func (c *chunkSeekWriter) Write(p []byte) (n int, err error) {
@@ -85,6 +88,14 @@ func (c *chunkSeekWriter) Write(p []byte) (n int, err error) {
 		if err != nil {
 			return n, err
 		}
+
+		if c.continuous {
+			c.window = append(c.window, p[:toWrite]...)
+			if len(c.window) > 32768 {
+				c.window = c.window[len(c.window)-32768:]
+			}
+		}
+
 		n += wn
 		c.written += uint32(wn)
 		c.totalWrite += int64(wn)
@@ -92,21 +103,32 @@ func (c *chunkSeekWriter) Write(p []byte) (n int, err error) {
 
 		if c.written >= c.chunkSize {
 			// Only flush and record if we are NOT at the very end of the file.
-			// If we are at the end, Close() will handle it.
-			// If UncompressedSize64 is 0 (unknown), we must record to be safe.
 			if c.h.UncompressedSize64 == 0 || c.totalWrite < int64(c.h.UncompressedSize64) {
 				if f, ok := c.comp.(flusher); ok {
 					f.Flush()
 				}
-				// Clear the dictionary to make the next chunk completely independent
-				if r, ok := c.comp.(interface{ ResetDict() }); ok {
-					r.ResetDict()
-				}
-				// Record relative offset from the start of compressed data
-				relativeOffset := c.base.count - c.dataStart
-				c.h.SeekIndex = append(c.h.SeekIndex, uint64(relativeOffset))
-			}
 
+				// Record relative offset from the start of compressed data AFTER flush
+				relativeOffset := c.base.count - c.dataStart
+
+				if c.continuous {
+					pt := gzPoint{
+						compOffset:   uint64(relativeOffset),
+						uncompOffset: uint64(c.totalWrite),
+						bits:         0,
+						hasData:      1,
+						window:       make([]byte, 32768),
+					}
+					copy(pt.window[32768-len(c.window):], c.window)
+					c.h.GzidxPoints = append(c.h.GzidxPoints, pt)
+				} else {
+					// Clear the dictionary to make the next chunk completely independent
+					if r, ok := c.comp.(interface{ ResetDict() }); ok {
+						r.ResetDict()
+					}
+					c.h.SeekIndex = append(c.h.SeekIndex, uint64(relativeOffset))
+				}
+			}
 			c.written = 0
 		}
 	}
@@ -404,16 +426,21 @@ func (w *Writer) CreateHeader(fh *FileHeader) (io.Writer, error) {
 			return nil, err
 		}
 
+		fw.rawCount = &countWriter{w: fw.comp}
 		fw.header = h
 		if fh.SeekChunkSize > 0 && originalMethod != Store {
-			// First block always starts at 0 (relative to data start)
-			h.SeekIndex = []uint64{0}
 			csw := &chunkSeekWriter{
-				h:         h,
-				comp:      fw.comp,
-				base:      fw.compCount,
-				chunkSize: fh.SeekChunkSize,
-				dataStart: fw.compCount.count,
+				h:          h,
+				comp:       fw.comp,
+				base:       fw.compCount,
+				chunkSize:  fh.SeekChunkSize,
+				dataStart:  fw.compCount.count,
+				continuous: fh.SeekContinuous,
+			}
+			if fh.SeekContinuous {
+				h.GzidxPoints = []gzPoint{{compOffset: 0, uncompOffset: 0, bits: 0, hasData: 0}}
+			} else {
+				h.SeekIndex = []uint64{0} // SOZip explicitly skips offset 0 in the payload
 			}
 			fw.rawCount = &countWriter{w: csw}
 			ow = fw
@@ -652,8 +679,6 @@ func (w *fileWriter) close() error {
 		}
 	}
 
-	// Important: call injectAutoExtras AGAIN to serialize the SeekIndex
-	// which was populated during the Write calls.
 	w.header.injectAutoExtras()
 
 	fh := w.header.FileHeader
@@ -674,7 +699,104 @@ func (w *fileWriter) close() error {
 		fh.UncompressedSize = uint32(fh.UncompressedSize64)
 	}
 
-	return w.writeDataDescriptor()
+	if err := w.writeDataDescriptor(); err != nil {
+		return err
+	}
+
+	if w.header.SeekChunkSize > 0 && w.header.Method != Store {
+		if err := w.writeHiddenIndex(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (w *fileWriter) writeHiddenIndex() error {
+	var payload []byte
+	var ext string
+
+	if w.header.SeekContinuous {
+		ext = ".gzidx"
+		payload = w.buildGZIDX()
+	} else {
+		ext = ".sozip.idx"
+		payload = w.buildSOZip()
+	}
+
+	dir, name := path.Split(w.header.Name)
+	hiddenName := dir + "." + name + ext
+
+	fh := &FileHeader{
+		Name:               hiddenName,
+		Method:             Store,
+		UncompressedSize64: uint64(len(payload)),
+		CompressedSize64:   uint64(len(payload)),
+	}
+	fh.injectAutoExtras()
+
+	h := &header{
+		FileHeader: fh,
+		offset:     uint64(w.zipw.(*countWriter).count),
+		raw:        true,
+	}
+
+	if err := writeHeader(w.zipw, h); err != nil {
+		return err
+	}
+	if _, err := w.zipw.Write(payload); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (w *fileWriter) buildSOZip() []byte {
+	buf := new(bytes.Buffer)
+	buf.Grow(32 + (len(w.header.SeekIndex)-1)*8)
+
+	binary.Write(buf, binary.LittleEndian, uint32(1))
+	binary.Write(buf, binary.LittleEndian, uint32(0))
+	binary.Write(buf, binary.LittleEndian, uint32(w.header.SeekChunkSize))
+	binary.Write(buf, binary.LittleEndian, uint32(8))
+	binary.Write(buf, binary.LittleEndian, uint64(w.header.UncompressedSize64))
+	binary.Write(buf, binary.LittleEndian, uint64(w.header.CompressedSize64))
+
+	for i := 1; i < len(w.header.SeekIndex); i++ {
+		binary.Write(buf, binary.LittleEndian, uint64(w.header.SeekIndex[i]))
+	}
+	return buf.Bytes()
+}
+
+func (w *fileWriter) buildGZIDX() []byte {
+	buf := new(bytes.Buffer)
+	buf.Write([]byte("GZIDX"))
+	buf.WriteByte(1) // version
+	buf.WriteByte(0) // flags
+
+	binary.Write(buf, binary.LittleEndian, uint64(w.header.CompressedSize64))
+	binary.Write(buf, binary.LittleEndian, uint64(w.header.UncompressedSize64))
+	binary.Write(buf, binary.LittleEndian, uint32(w.header.SeekChunkSize))
+	binary.Write(buf, binary.LittleEndian, uint32(32768)) // windowSize
+	binary.Write(buf, binary.LittleEndian, uint32(len(w.header.GzidxPoints)))
+
+	for _, pt := range w.header.GzidxPoints {
+		binary.Write(buf, binary.LittleEndian, pt.compOffset)
+		binary.Write(buf, binary.LittleEndian, pt.uncompOffset)
+		buf.WriteByte(pt.bits)
+		buf.WriteByte(pt.hasData)
+	}
+	for _, pt := range w.header.GzidxPoints {
+		if pt.hasData == 1 {
+			if len(pt.window) == 32768 {
+				buf.Write(pt.window)
+			} else {
+				pad := make([]byte, 32768)
+				copy(pad[32768-len(pt.window):], pt.window)
+				buf.Write(pad)
+			}
+		}
+	}
+	return buf.Bytes()
 }
 
 func (w *fileWriter) writeDataDescriptor() error {
