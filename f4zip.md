@@ -47,7 +47,7 @@ Provides "solid" compression (similar to `.tar.gz` or `.7z`) for a collection of
 
 ### 2.4. Random Access Indexes (SOZip & Hidden Files)
 
-f4 extensions standatd adopts the **SOZip (Seek-Optimized ZIP)** methodology for random access:
+f4 extensions standard adopts the **SOZip (Seek-Optimized ZIP)** methodology for random access:
 
 #### 2.4.1 Chunk-Based Deflate (SOZip Standard)
 For chunked streams (where the decompressor state is periodically flushed using `Z_FULL_FLUSH`), implementations MUST follow the official [SOZip specification](https://github.com/sozip/sozip-spec).
