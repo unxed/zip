@@ -62,11 +62,13 @@ const (
 	//                      0x756e // ASi UNIX
 	//                             // 0x756f..0x7810 unused
 	xattrExtraID          = 0x7811 // f4 extensions: Xattrs
-	unixOwnerNameExtraID  = 0x7812 // f4 extensions: Unix owner/group string names
+	//                      0x7812 // Reserved for further f4 extensions versions
 	//                      0x7813 // Reserved for further f4 extensions versions
 	//                      0x7814 // Reserved for further f4 extensions versions
 	//                      0x7815 // Reserved for further f4 extensions versions
-	//                             // 0x7816..0x7854 unused (0x7816/0x7817 deprecated in favor of SOZip hidden files)
+	//                      0x7816 // Reserved for further f4 extensions versions
+	unixOwnerNameExtraID  = 0x7817 // f4 extensions: Unix owner/group string names
+	//                             // 0x7818..0x7854 unused
 	//                      0x7855 // Info-ZIP UNIX (new)
 	//                      0x7875 // Info-ZIP UNIX (newer UID/GID)
 	winzipAesExtraID      = 0x9901 // WinZip AES encryption extra field
