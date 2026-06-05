@@ -248,3 +248,69 @@ func TestWinZipAES_Writer_BufResizing(t *testing.T) {
 		t.Errorf("expected %q, got %q", expected, string(content))
 	}
 }
+func TestWinZipAES_Seekable(t *testing.T) {
+	password := "seek-pass-123"
+	// Generate enough data to cross multiple 16-byte blocks
+	data := bytes.Repeat([]byte("1234567890ABCDEF"), 1000) // 16000 bytes
+
+	buf := new(bytes.Buffer)
+	zw := NewWriter(buf)
+
+	// 1. Uncompressed (Store) with AES
+	fh1 := &FileHeader{
+		Name:        "store.bin",
+		Method:      Store,
+		Password:    password,
+		AESStrength: 3,
+	}
+	w1, _ := zw.CreateHeader(fh1)
+	w1.Write(data)
+
+	// 2. Compressed (Deflate) with AES + Seek Index
+	fh2 := &FileHeader{
+		Name:           "deflate.bin",
+		Method:         Deflate,
+		Password:       password,
+		AESStrength:    3,
+		SeekChunkSize:  1024,
+		SeekContinuous: true,
+	}
+	w2, _ := zw.CreateHeader(fh2)
+	w2.Write(data)
+
+	zw.Close()
+
+	zr, _ := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	zr.SetPassword(password)
+
+	// --- Test 1: Store (Direct O(1) AES-CTR mapping) ---
+	f1 := zr.File[0]
+	rs1, err := f1.OpenSeekable()
+	if err != nil {
+		t.Fatalf("OpenSeekable Store failed: %v", err)
+	}
+
+	// Seek to unaligned offset (17) which crosses the 16-byte block boundary
+	rs1.Seek(17, io.SeekStart)
+	out := make([]byte, 16)
+	io.ReadFull(rs1, out)
+	if !bytes.Equal(out, data[17:33]) {
+		t.Errorf("Store seek mismatch:\ngot  %q\nwant %q", string(out), string(data[17:33]))
+	}
+
+	// --- Test 2: Deflate + GZIDX + AES ---
+	f2 := zr.File[1]
+	rs2, err := f2.OpenSeekable()
+	if err != nil {
+		t.Fatalf("OpenSeekable Deflate failed: %v", err)
+	}
+
+	// Seek directly into the second chunk boundary where dictionary state is needed.
+	// The AES decrypter should automatically shift the IV to match the start of the compressed chunk!
+	rs2.Seek(2048, io.SeekStart)
+	out2 := make([]byte, 16)
+	io.ReadFull(rs2, out2)
+	if !bytes.Equal(out2, data[2048:2064]) {
+		t.Errorf("Deflate seek mismatch:\ngot  %q\nwant %q", string(out2), string(data[2048:2064]))
+	}
+}

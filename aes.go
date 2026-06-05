@@ -113,6 +113,115 @@ func newWinZipAesReader(r io.Reader, password string, info *winzipAesInfo, compr
 		mac:       hmac.New(sha1.New, authKey),
 	}, info.actualMethod, nil
 }
+// addIVBigEndian adds a block offset to a 128-bit big-endian IV
+func addIVBigEndian(baseIV []byte, offset uint64) []byte {
+	iv := make([]byte, 16)
+	copy(iv, baseIV)
+	var carry uint64 = offset
+	for i := 15; i >= 0 && carry > 0; i-- {
+		sum := uint64(iv[i]) + (carry & 0xFF)
+		iv[i] = byte(sum)
+		carry = (carry >> 8) + (sum >> 8)
+	}
+	return iv
+}
+
+type winZipAesReaderAt struct {
+	r          io.ReaderAt
+	baseOffset int64
+	encKey     []byte
+	limit      int64
+}
+
+func newWinZipAesReaderAt(r io.ReaderAt, password string, info *winzipAesInfo, compressedSize int64) (*winZipAesReaderAt, error) {
+	if info == nil {
+		return nil, errors.New("zip: AES info missing")
+	}
+	var keyLen, saltLen int
+	switch info.strength {
+	case 1: keyLen, saltLen = 16, 8
+	case 2: keyLen, saltLen = 24, 12
+	case 3: keyLen, saltLen = 32, 16
+	default: return nil, errors.New("zip: unknown AES strength")
+	}
+
+	salt := make([]byte, saltLen)
+	if _, err := r.ReadAt(salt, 0); err != nil {
+		return nil, err
+	}
+
+	keys := pbkdf2.Key([]byte(password), salt, 1000, keyLen*2+2, sha1.New)
+	encKey := keys[:keyLen]
+	pwVerif := keys[2*keyLen : 2*keyLen+2]
+
+	verifBuf := make([]byte, 2)
+	if _, err := r.ReadAt(verifBuf, int64(saltLen)); err != nil {
+		return nil, err
+	}
+	if !hmac.Equal(verifBuf, pwVerif) {
+		return nil, errors.New("zip: incorrect password")
+	}
+
+	limit := compressedSize - int64(saltLen) - 2 - 10
+	if limit < 0 {
+		return nil, errors.New("zip: encrypted data too short")
+	}
+
+	return &winZipAesReaderAt{
+		r:          r,
+		baseOffset: int64(saltLen + 2),
+		encKey:     encKey,
+		limit:      limit,
+	}, nil
+}
+
+func (ar *winZipAesReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	if off < 0 || off >= ar.limit {
+		return 0, io.EOF
+	}
+
+	avail := ar.limit - off
+	if int64(len(p)) > avail {
+		p = p[:avail]
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	blockOffset := uint64(off / 16)
+	rem := int(off % 16)
+
+	readSize := len(p) + rem
+	encBuf := make([]byte, readSize)
+
+	n, err := ar.r.ReadAt(encBuf, ar.baseOffset+off-int64(rem))
+	if n == 0 && err != nil {
+		return 0, err
+	}
+
+	encBuf = encBuf[:n]
+
+	block, errC := aes.NewCipher(ar.encKey)
+	if errC != nil {
+		return 0, errC
+	}
+
+	iv := make([]byte, 16)
+	iv[0] = 1
+	ctrIV := addIVBigEndian(iv, blockOffset)
+
+	stream := cipher.NewCTR(block, ctrIV)
+	decBuf := make([]byte, n)
+	stream.XORKeyStream(decBuf, encBuf)
+
+	copied := copy(p, decBuf[rem:])
+
+	if err == io.EOF && copied == len(p) {
+		return copied, nil
+	}
+
+	return copied, err
+}
 
 type aesWriter struct {
 	w         io.Writer

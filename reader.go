@@ -469,10 +469,29 @@ func (f *File) findHiddenIndex() (int, []byte, error) {
 // OpenSeekable returns a ReadSeeker for the file content.
 // It requires a Seek Index (Hidden SOZip or GZIDX) to be present in the archive for compressed files.
 func (f *File) OpenSeekable() (io.ReadSeeker, error) {
-	if f.Method == Store {
+	actualMethod := f.Method
+	if f.Method == winzipAesExtraID && f.aesInfo != nil {
+		actualMethod = f.aesInfo.actualMethod
+	}
+
+	if actualMethod == Store {
 		bodyOffset, err := f.findBodyOffset()
 		if err != nil {
 			return nil, err
+		}
+		if f.IsEncrypted() {
+			if f.zip.password == nil {
+				return nil, errors.New("zip: file is encrypted but no password provided")
+			}
+			if f.Method == winzipAesExtraID || f.aesInfo != nil {
+				rawSection := io.NewSectionReader(f.zipr, f.headerOffset+bodyOffset, int64(f.CompressedSize64))
+				aesRA, err := newWinZipAesReaderAt(rawSection, f.zip.password(), f.aesInfo, int64(f.CompressedSize64))
+				if err != nil {
+					return nil, err
+				}
+				return io.NewSectionReader(aesRA, 0, int64(f.UncompressedSize64)), nil
+			}
+			return nil, errors.New("zip: random access not supported for classic ZipCrypto")
 		}
 		return io.NewSectionReader(f.zipr, f.headerOffset+bodyOffset, int64(f.UncompressedSize64)), nil
 	}
@@ -611,9 +630,33 @@ func (s *solidReadSeeker) Read(p []byte) (int, error) {
 		}
 
 		totalCompSize := int64(s.f.CompressedSize64)
-		remainingComp := totalCompSize - compOffset
 
-		section := io.NewSectionReader(s.f.zipr, s.f.headerOffset+bodyOffset+compOffset, remainingComp)
+		var section io.Reader
+		actualMethod := s.f.Method
+
+		if s.f.IsEncrypted() {
+			if s.f.zip.password == nil {
+				return 0, errors.New("zip: file is encrypted but no password provided")
+			}
+			pass := s.f.zip.password()
+
+			if s.f.Method == winzipAesExtraID || s.f.aesInfo != nil {
+				rawSection := io.NewSectionReader(s.f.zipr, s.f.headerOffset+bodyOffset, totalCompSize)
+				aesRA, err := newWinZipAesReaderAt(rawSection, pass, s.f.aesInfo, totalCompSize)
+				if err != nil {
+					return 0, err
+				}
+				actualMethod = s.f.aesInfo.actualMethod
+
+				remainingComp := aesRA.limit - compOffset
+				section = io.NewSectionReader(aesRA, compOffset, remainingComp)
+			} else {
+				return 0, errors.New("zip: random access not supported for classic ZipCrypto")
+			}
+		} else {
+			remainingComp := totalCompSize - compOffset
+			section = io.NewSectionReader(s.f.zipr, s.f.headerOffset+bodyOffset+compOffset, remainingComp)
+		}
 
 		if s.isContinuous {
 			var best *gzPoint
@@ -626,14 +669,14 @@ func (s *solidReadSeeker) Read(p []byte) (int, error) {
 			if best != nil && best.hasData == 1 {
 				s.currRC = flate.NewReaderDict(section, best.window)
 			} else {
-				dcomp := s.f.zip.decompressor(s.f.Method)
+				dcomp := s.f.zip.decompressor(actualMethod)
 				if dcomp == nil {
 					return 0, ErrAlgorithm
 				}
 				s.currRC = dcomp(section)
 			}
 		} else {
-			dcomp := s.f.zip.decompressor(s.f.Method)
+			dcomp := s.f.zip.decompressor(actualMethod)
 			if dcomp == nil {
 				return 0, ErrAlgorithm
 			}
