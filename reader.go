@@ -56,13 +56,14 @@ type File struct {
 
 // OpenReaderWithPassword opens a ZIP file with a password for Central Directory Encryption.
 func OpenReaderWithPassword(name string, password string) (*ReadCloser, error) {
-	ra, size, closer, err := openMultiVolume(name)
+	mvr, size, err := OpenMultiVolume(name, os.O_RDONLY)
 	if err != nil {
 		return nil, err
 	}
+	var ra io.ReaderAt = mvr
 	ra, size, err = checkF4Recovery(ra, size)
 	if err != nil {
-		closer.Close()
+		mvr.Close()
 		return nil, err
 	}
 
@@ -71,16 +72,12 @@ func OpenReaderWithPassword(name string, password string) (*ReadCloser, error) {
 		r.SetPassword(password)
 	}
 	if err = r.init(ra, size); err != nil {
-		closer.Close()
+		mvr.Close()
 		return nil, err
 	}
 
-	if mvr, ok := closer.(*multiVolumeReader); ok {
-		r.f = mvr.files[len(mvr.files)-1]
-		r.Reader.r = ra
-	} else {
-		r.f = closer.(*os.File)
-	}
+	r.f = mvr.files[len(mvr.files)-1]
+	r.Reader.r = ra
 
 	return r, nil
 }
@@ -271,7 +268,7 @@ func (r *Reader) SetPassword(password string) {
 }
 
 func (rc *ReadCloser) Close() error {
-	if mvr, ok := rc.Reader.r.(*multiVolumeReader); ok {
+	if mvr, ok := rc.Reader.r.(*MultiVolumeReader); ok {
 		return mvr.Close()
 	}
 	return rc.f.Close()

@@ -169,10 +169,12 @@ type Archiver struct {
 }
 
 // WithArchiverRecovery устанавливает параметры PAR2 избыточности
-func WithArchiverRecovery(pct int, f *os.File) ArchiverOption {
+func WithArchiverRecovery(pct int, f interface{ Name() string }) ArchiverOption {
 	return func(o *archiverOptions) error {
 		o.recoveryPct = pct
-		o.recoveryFile = f
+		if osFile, ok := f.(*os.File); ok {
+			o.recoveryFile = osFile
+		}
 		return nil
 	}
 }

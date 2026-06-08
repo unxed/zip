@@ -17,11 +17,11 @@ func TestMultiVolumeReader_ReadAt(t *testing.T) {
 	os.WriteFile(vol1Path, []byte("12345"), 0644)
 	os.WriteFile(zipPath, []byte("67890"), 0644)
 
-	ra, size, closer, err := openMultiVolume(zipPath)
+	ra, size, err := OpenMultiVolume(zipPath, os.O_RDONLY)
 	if err != nil {
 		t.Fatalf("failed to open multivolume: %v", err)
 	}
-	defer closer.Close()
+	defer ra.Close()
 
 	if size != 10 {
 		t.Errorf("expected size 10, got %d", size)
@@ -48,11 +48,11 @@ func TestMultiVolumeReader_Casing(t *testing.T) {
 	os.WriteFile(vol1Path, []byte("ABCDE"), 0644)
 	os.WriteFile(zipPath, []byte("FGHIJ"), 0644)
 
-	ra, size, closer, err := openMultiVolume(zipPath)
+	ra, size, err := OpenMultiVolume(zipPath, os.O_RDONLY)
 	if err != nil {
 		t.Fatalf("failed to open multivolume: %v", err)
 	}
-	defer closer.Close()
+	defer ra.Close()
 
 	if size != 10 {
 		t.Errorf("expected size 10, got %d", size)

@@ -4,6 +4,7 @@ import (
     "os"
     "fmt"
     "path"
+    "path/filepath"
 	"bufio"
 	"encoding/binary"
 	"bytes"
@@ -246,24 +247,31 @@ func (w *Writer) Close() error {
 	// Интегрируем генерацию скрытого файла избыточности .recovery.par2 прямо перед CD
 	if w.recoveryPct > 0 && w.recoveryFile != nil && !w.torrentZip && w.password == "" {
 		w.cw.w.(*bufio.Writer).Flush()
-		w.recoveryFile.Sync()
+		if syncer, ok := interface{}(w.recoveryFile).(interface{ Sync() error }); ok {
+			syncer.Sync()
+		}
 
-		par2Bytes, err := par2.GeneratePAR2Data(w.recoveryFile.Name(), w.recoveryPct)
-		if err == nil && len(par2Bytes) > 0 {
-			fh := &FileHeader{
-				Name:               ".recovery.par2",
-				Method:             Store,
-				UncompressedSize64: uint64(len(par2Bytes)),
-				CompressedSize64:   uint64(len(par2Bytes)),
-			}
-			fh.injectAutoExtras()
-			h := &header{
-				FileHeader: fh,
-				offset:     uint64(w.cw.count),
-				raw:        true,
-			}
-			if err := writeHeader(w.cw, h); err == nil {
-				w.cw.Write(par2Bytes)
+		mvr, totalSize, err := OpenMultiVolume(w.recoveryFile.Name(), os.O_RDONLY)
+		if err == nil {
+			r := io.NewSectionReader(mvr, 0, totalSize)
+			par2Bytes, err := par2.GeneratePAR2Stream(r, totalSize, filepath.Base(w.recoveryFile.Name()), w.recoveryPct)
+			mvr.Close()
+			if err == nil && len(par2Bytes) > 0 {
+				fh := &FileHeader{
+					Name:               ".recovery.par2",
+					Method:             Store,
+					UncompressedSize64: uint64(len(par2Bytes)),
+					CompressedSize64:   uint64(len(par2Bytes)),
+				}
+				fh.injectAutoExtras()
+				h := &header{
+					FileHeader: fh,
+					offset:     uint64(w.cw.count),
+					raw:        true,
+				}
+				if err := writeHeader(w.cw, h); err == nil {
+					w.cw.Write(par2Bytes)
+				}
 			}
 		}
 	}
