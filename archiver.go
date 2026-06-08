@@ -45,6 +45,18 @@ type archiverOptions struct {
 	seekContinuous          bool
 	password                string
 	encryptCD               bool
+	torrentZip              bool
+}
+
+func WithArchiverTorrentZip(b bool) ArchiverOption {
+	return func(o *archiverOptions) error {
+		o.torrentZip = b
+		if b {
+			o.method = Deflate
+			o.concurrency = 1
+		}
+		return nil
+	}
 }
 
 func WithArchiverMethod(method uint16) ArchiverOption {
@@ -178,10 +190,17 @@ func NewArchiver(w io.Writer, chroot string, opts ...ArchiverOption) (*Archiver,
 		}
 	}
 
+	if a.options.torrentZip {
+		a.options.concurrency = 1
+	}
+
 	a.zw = NewWriter(w)
 	a.zw.SetOffset(a.options.offset)
 	if a.options.encryptCD && a.options.password != "" {
 		a.zw.SetEncryptCentralDirectory(true, a.options.password)
+	}
+	if a.options.torrentZip {
+		a.zw.SetTorrentZip(true)
 	}
 	return a, nil
 }
@@ -299,11 +318,55 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 		}
 	}
 
+	if a.options.torrentZip {
+		dirs := make(map[string]bool)
+		for name, fi := range files {
+			if fi != nil && fi.IsDir() {
+				dirs[filepath.ToSlash(name)] = true
+			}
+		}
+		for name := range files {
+			dir := filepath.ToSlash(name)
+			for {
+				idx := strings.LastIndex(dir, "/")
+				if idx <= 0 {
+					break
+				}
+				dir = dir[:idx]
+				delete(dirs, dir)
+			}
+		}
+		for name, fi := range files {
+			if fi != nil && fi.IsDir() && !dirs[filepath.ToSlash(name)] {
+				delete(files, name)
+			}
+		}
+	}
+
 	names := make([]string, 0, len(files))
 	for name := range files {
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	if a.options.torrentZip {
+		sort.Slice(names, func(i, j int) bool {
+			relI, _ := filepath.Rel(a.chroot, names[i])
+			relJ, _ := filepath.Rel(a.chroot, names[j])
+			fiI := files[names[i]]
+			fiJ := files[names[j]]
+
+			pathI := filepath.ToSlash(relI)
+			pathJ := filepath.ToSlash(relJ)
+			if fiI != nil && fiI.IsDir() && !strings.HasSuffix(pathI, "/") {
+				pathI += "/"
+			}
+			if fiJ != nil && fiJ.IsDir() && !strings.HasSuffix(pathJ, "/") {
+				pathJ += "/"
+			}
+			return strings.ToLower(pathI) < strings.ToLower(pathJ)
+		})
+	} else {
+		sort.Strings(names)
+	}
 
 	var fp *filepool.FilePool
 	concurrency := a.options.concurrency
@@ -453,7 +516,9 @@ func (a *Archiver) fileInfoHeaderFast(name string, fi os.FileInfo, hdr *FileHead
 	hdr.Password = a.options.password
 
 	// Respect archiver options for metadata
-	appendPlatformExtra(fi, hdr, a.options.includePlatformMetadata)
+	if !a.options.torrentZip {
+		appendPlatformExtra(fi, hdr, a.options.includePlatformMetadata)
+	}
 }
 
 func (a *Archiver) createDirectory(fi os.FileInfo, hdr *FileHeader) error {

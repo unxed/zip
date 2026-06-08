@@ -1,6 +1,7 @@
 package zip
 
 import (
+    "fmt"
     "path"
 	"bufio"
 	"encoding/binary"
@@ -31,12 +32,24 @@ type Writer struct {
 	encryptCD   bool
 	password    string
 	forceNoDescriptor bool
+	torrentZip        bool
+}
+
+// SetTorrentZip enables torrentzip compatibility mode.
+// It enforces predictable timestamps, clears extra fields, disables data descriptors,
+// and appends a TORRENTZIPPED- CRC32 comment to the archive.
+func (w *Writer) SetTorrentZip(b bool) {
+	w.torrentZip = b
+	if b {
+		w.forceNoDescriptor = true
+	}
 }
 
 type header struct {
 	*FileHeader
-	offset uint64
-	raw    bool
+	offset     uint64
+	raw        bool
+	torrentZip bool
 }
 
 func NewWriter(w io.Writer) *Writer {
@@ -159,6 +172,11 @@ func (w *Writer) Close() error {
 	var cdWriter io.Writer = w.cw
 	var cdBuf *bytes.Buffer
 	var aesW io.WriteCloser
+	cdHasher := crc32.NewIEEE()
+
+	if w.torrentZip {
+		cdWriter = io.MultiWriter(w.cw, cdHasher)
+	}
 
 	if w.encryptCD && w.password != "" {
 		cdBuf = new(bytes.Buffer)
@@ -215,6 +233,10 @@ func (w *Writer) Close() error {
 		if _, err := io.WriteString(cdWriter, h.Comment); err != nil {
 			return err
 		}
+	}
+
+	if w.torrentZip {
+		w.comment = fmt.Sprintf("TORRENTZIPPED-%08X", cdHasher.Sum32())
 	}
 
 	if w.encryptCD && w.password != "" {
@@ -362,7 +384,22 @@ func (w *Writer) CreateHeader(fh *FileHeader) (io.Writer, error) {
 	fh.CreatorVersion = fh.CreatorVersion&0xff00 | zipVersion20
 	fh.ReaderVersion = zipVersion20
 
-	originalMethod := fh.injectAutoExtras()
+	if w.torrentZip {
+		fh.ModifiedTime = 48128
+		fh.ModifiedDate = 8600
+		fh.Flags = 2
+		fh.Extra = nil
+		fh.ExternalAttrs = 0
+		fh.CreatorVersion = 0
+		fh.ReaderVersion = 20
+	}
+
+	var originalMethod uint16
+	if !w.torrentZip {
+		originalMethod = fh.injectAutoExtras()
+	} else {
+		originalMethod = fh.Method
+	}
 
 	var (
 		ow io.Writer
@@ -371,6 +408,7 @@ func (w *Writer) CreateHeader(fh *FileHeader) (io.Writer, error) {
 	h := &header{
 		FileHeader: fh,
 		offset:     uint64(w.cw.count),
+		torrentZip: w.torrentZip,
 	}
 
 	if strings.HasSuffix(fh.Name, "/") {
@@ -537,10 +575,21 @@ func (w *Writer) CreateRaw(fh *FileHeader) (io.Writer, error) {
 	fh.CompressedSize = uint32(min(fh.CompressedSize64, uint32max))
 	fh.UncompressedSize = uint32(min(fh.UncompressedSize64, uint32max))
 
+	if w.torrentZip {
+		fh.ModifiedTime = 48128
+		fh.ModifiedDate = 8600
+		fh.Flags = 2
+		fh.Extra = nil
+		fh.ExternalAttrs = 0
+		fh.CreatorVersion = 0
+		fh.ReaderVersion = 20
+	}
+
 	h := &header{
 		FileHeader: fh,
 		offset:     uint64(w.cw.count),
 		raw:        true,
+		torrentZip: w.torrentZip,
 	}
 	w.dir = append(w.dir, h)
 	if err := writeHeader(w.cw, h); err != nil {
@@ -679,7 +728,11 @@ func (w *fileWriter) close() error {
 		}
 	}
 
-	w.header.injectAutoExtras()
+	if !w.header.torrentZip {
+		w.header.injectAutoExtras()
+	} else {
+		w.header.Extra = nil
+	}
 
 	fh := w.header.FileHeader
 	if w.isAES {
