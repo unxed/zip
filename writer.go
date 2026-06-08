@@ -1,6 +1,7 @@
 package zip
 
 import (
+    "os"
     "fmt"
     "path"
 	"bufio"
@@ -13,6 +14,7 @@ import (
 	"io/fs"
 	"strings"
 	"unicode/utf8"
+    "github.com/unxed/par2"
 )
 
 var (
@@ -33,6 +35,8 @@ type Writer struct {
 	password    string
 	forceNoDescriptor bool
 	torrentZip        bool
+	recoveryPct       int
+	recoveryFile      *os.File
 }
 
 // SetTorrentZip enables torrentzip compatibility mode.
@@ -237,6 +241,31 @@ func (w *Writer) Close() error {
 
 	if w.torrentZip {
 		w.comment = fmt.Sprintf("TORRENTZIPPED-%08X", cdHasher.Sum32())
+	}
+
+	// Интегрируем генерацию скрытого файла избыточности .recovery.par2 прямо перед CD
+	if w.recoveryPct > 0 && w.recoveryFile != nil && !w.torrentZip && w.password == "" {
+		w.cw.w.(*bufio.Writer).Flush()
+		w.recoveryFile.Sync()
+
+		par2Bytes, err := par2.GeneratePAR2Data(w.recoveryFile.Name(), w.recoveryPct)
+		if err == nil && len(par2Bytes) > 0 {
+			fh := &FileHeader{
+				Name:               ".recovery.par2",
+				Method:             Store,
+				UncompressedSize64: uint64(len(par2Bytes)),
+				CompressedSize64:   uint64(len(par2Bytes)),
+			}
+			fh.injectAutoExtras()
+			h := &header{
+				FileHeader: fh,
+				offset:     uint64(w.cw.count),
+				raw:        true,
+			}
+			if err := writeHeader(w.cw, h); err == nil {
+				w.cw.Write(par2Bytes)
+			}
+		}
 	}
 
 	if w.encryptCD && w.password != "" {

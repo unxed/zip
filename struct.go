@@ -1,6 +1,7 @@
 package zip
 
 import (
+    "os"
 	"io/fs"
 	"encoding/binary"
 	"path"
@@ -108,6 +109,8 @@ type FileHeader struct {
 	Name               string
 	Comment            string
 	NonUTF8            bool // If set, disables automatic UTF-8 flag encoding
+	RecoveryPct        int  // Уровень избыточности PAR2 для всего архива
+	RecoveryFile       *os.File
 	CreatorVersion     uint16
 	ReaderVersion      uint16
 	Flags              uint16

@@ -60,6 +60,11 @@ func OpenReaderWithPassword(name string, password string) (*ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
+	ra, size, err = checkF4Recovery(ra, size)
+	if err != nil {
+		closer.Close()
+		return nil, err
+	}
 
 	r := new(ReadCloser)
 	if password != "" {
@@ -88,11 +93,15 @@ func NewReaderWithPassword(r io.ReaderAt, size int64, password string) (*Reader,
 	if size < 0 {
 		return nil, errors.New("zip: size cannot be negative")
 	}
+	r, size, err := checkF4Recovery(r, size)
+	if err != nil {
+		return nil, err
+	}
 	zr := new(Reader)
 	if password != "" {
 		zr.SetPassword(password)
 	}
-	err := zr.init(r, size)
+	err = zr.init(r, size)
 	if err != nil && err != ErrInsecurePath {
 		return nil, err
 	}

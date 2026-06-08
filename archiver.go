@@ -46,6 +46,8 @@ type archiverOptions struct {
 	password                string
 	encryptCD               bool
 	torrentZip              bool
+	recoveryPct             int
+	recoveryFile            *os.File
 }
 
 func WithArchiverTorrentZip(b bool) ArchiverOption {
@@ -166,6 +168,15 @@ type Archiver struct {
 	seenHardLinks    map[hardlinkKey]string
 }
 
+// WithArchiverRecovery устанавливает параметры PAR2 избыточности
+func WithArchiverRecovery(pct int, f *os.File) ArchiverOption {
+	return func(o *archiverOptions) error {
+		o.recoveryPct = pct
+		o.recoveryFile = f
+		return nil
+	}
+}
+
 func NewArchiver(w io.Writer, chroot string, opts ...ArchiverOption) (*Archiver, error) {
 	var err error
 	if chroot, err = filepath.Abs(chroot); err != nil {
@@ -196,6 +207,10 @@ func NewArchiver(w io.Writer, chroot string, opts ...ArchiverOption) (*Archiver,
 
 	a.zw = NewWriter(w)
 	a.zw.SetOffset(a.options.offset)
+	if a.options.recoveryPct > 0 && a.options.recoveryFile != nil {
+		a.zw.recoveryPct = a.options.recoveryPct
+		a.zw.recoveryFile = a.options.recoveryFile
+	}
 	if a.options.encryptCD && a.options.password != "" {
 		a.zw.SetEncryptCentralDirectory(true, a.options.password)
 	}
