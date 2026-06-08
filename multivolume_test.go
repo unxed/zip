@@ -67,3 +67,50 @@ func TestMultiVolumeReader_Casing(t *testing.T) {
 		t.Errorf("casing read failed: got %q", string(buf))
 	}
 }
+func TestMultiVolumeWriter_Roundtrip(t *testing.T) {
+	tmp := t.TempDir()
+	mainPath := filepath.Join(tmp, "test_write.zip")
+	splitSize := int64(10) // 10 bytes per volume
+
+	mvw, err := NewMultiVolumeWriter(mainPath, splitSize)
+	if err != nil {
+		t.Fatalf("failed to create MultiVolumeWriter: %v", err)
+	}
+
+	data := []byte("abcdefghijklmnopqrstuvwxyz") // 26 bytes -> z01(10), z02(10), zip(6)
+	if _, err := mvw.Write(data); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if err := mvw.Close(); err != nil {
+		t.Fatalf("close failed: %v", err)
+	}
+
+	prefix := mainPath[:len(mainPath)-len(".zip")]
+	if _, err := os.Stat(prefix + ".z01"); err != nil {
+		t.Errorf("missing volume .z01")
+	}
+	if _, err := os.Stat(prefix + ".z02"); err != nil {
+		t.Errorf("missing volume .z02")
+	}
+	if _, err := os.Stat(mainPath); err != nil {
+		t.Errorf("missing main volume .zip")
+	}
+
+	mvr, totalSize, err := OpenMultiVolume(mainPath, os.O_RDONLY)
+	if err != nil {
+		t.Fatalf("failed to open multi-volume reader: %v", err)
+	}
+	defer mvr.Close()
+
+	if totalSize != int64(len(data)) {
+		t.Errorf("expected size %d, got %d", len(data), totalSize)
+	}
+
+	buf := make([]byte, len(data))
+	if _, err := mvr.ReadAt(buf, 0); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if string(buf) != string(data) {
+		t.Errorf("content mismatch: got %q, want %q", string(buf), string(data))
+	}
+}
