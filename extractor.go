@@ -428,7 +428,7 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 				name = stripped
 			}
 
-			path, err := filepath.Abs(filepath.Join(e.chroot, name))
+			path, err := e.absPath(name)
 			if err != nil {
 				return err
 			}
@@ -528,7 +528,7 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 			if file.Mode()&os.ModeSymlink == 0 && file.Linkname == "" {
 				continue
 			}
-			path, err := filepath.Abs(filepath.Join(e.chroot, file.Name))
+			path, err := e.absPath(file.Name)
 			if err != nil {
 				return err
 			}
@@ -541,7 +541,7 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 			if !file.Mode().IsDir() {
 				continue
 			}
-			path, err := filepath.Abs(filepath.Join(e.chroot, file.Name))
+			path, err := e.absPath(file.Name)
 			if err != nil {
 				if e.options.tolerant {
 					continue
@@ -561,7 +561,7 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 			if !strings.Contains(file.Name, ":") {
 				continue
 			}
-			path, err := filepath.Abs(filepath.Join(e.chroot, file.Name))
+			path, err := e.absPath(file.Name)
 			if err != nil {
 				return err
 			}
@@ -670,7 +670,7 @@ func (e *Extractor) extractSolidStream(r io.Reader, ctx context.Context) error {
 			name = stripped
 		}
 
-		path, err := filepath.Abs(filepath.Join(e.chroot, name))
+		path, err := e.absPath(name)
 		if err != nil {
 			return err
 		}
@@ -905,7 +905,11 @@ func (e *Extractor) createLink(path string, file *File) error {
 			}
 		}
 	} else if file.Linkname != "" {
-		targetPath := filepath.Join(e.chroot, file.Linkname)
+		linkname := file.Linkname
+		if strings.Contains(linkname, MappedStringMarkStr) {
+			linkname = string(encodeMappedString(linkname))
+		}
+		targetPath := filepath.Join(e.chroot, linkname)
 		if err := os.Link(targetPath, path); err != nil {
 			return err
 		}
@@ -1074,6 +1078,12 @@ func (e *Extractor) updateFileMetadata(path string, file *File) error {
 	e.m.Lock()
 	defer e.m.Unlock()
 	return e.options.chownErrorHandler(file.Name, err)
+}
+func (e *Extractor) absPath(name string) (string, error) {
+	if strings.Contains(name, MappedStringMarkStr) {
+		name = string(encodeMappedString(name))
+	}
+	return filepath.Abs(filepath.Join(e.chroot, name))
 }
 
 type ctxReader struct {
