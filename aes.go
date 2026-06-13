@@ -131,6 +131,7 @@ type winZipAesReaderAt struct {
 	baseOffset int64
 	encKey     []byte
 	limit      int64
+	iv         []byte
 }
 
 func newWinZipAesReaderAt(r io.ReaderAt, password string, info *winzipAesInfo, compressedSize int64) (*winZipAesReaderAt, error) {
@@ -167,11 +168,16 @@ func newWinZipAesReaderAt(r io.ReaderAt, password string, info *winzipAesInfo, c
 		return nil, errors.New("zip: encrypted data too short")
 	}
 
+	iv := make([]byte, 16)
+	for i := range iv { iv[i] = 0 }
+	iv[0] = 1
+
 	return &winZipAesReaderAt{
 		r:          r,
 		baseOffset: int64(saltLen + 2),
 		encKey:     encKey,
 		limit:      limit,
+		iv:         iv,
 	}, nil
 }
 
@@ -206,9 +212,7 @@ func (ar *winZipAesReaderAt) ReadAt(p []byte, off int64) (int, error) {
 		return 0, errC
 	}
 
-	iv := make([]byte, 16)
-	iv[0] = 1
-	ctrIV := addIVBigEndian(iv, blockOffset)
+	ctrIV := addIVBigEndian(ar.iv, blockOffset)
 
 	stream := cipher.NewCTR(block, ctrIV)
 	decBuf := make([]byte, n)

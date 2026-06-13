@@ -115,6 +115,8 @@ type Updater struct {
 	dirOffset int64
 }
 
+var ErrArchiveLocked = errors.New("zip: cannot modify archive, it is locked")
+
 // NewUpdater returns a new Updater from [io.ReadWriteSeeker], which is
 // assumed to have the given size in bytes.
 func NewUpdater(rws io.ReadWriteSeeker) (*Updater, error) {
@@ -128,6 +130,9 @@ func NewUpdater(rws io.ReadWriteSeeker) (*Updater, error) {
 	}
 	if err = zu.init(size); err != nil && err != ErrInsecurePath {
 		return nil, err
+	}
+	if strings.Contains(zu.comment, "[F4LOCKED]") {
+		return nil, ErrArchiveLocked
 	}
 	return zu, nil
 }

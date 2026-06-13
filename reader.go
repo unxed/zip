@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"unicode/utf8"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -94,6 +95,12 @@ func NewReaderWithPassword(r io.ReaderAt, size int64, password string) (*Reader,
 	if err != nil {
 		return nil, err
 	}
+
+	r, size, err = checkF4CryptZip(r, size, password)
+	if err != nil {
+		return nil, err
+	}
+
 	zr := new(Reader)
 	if password != "" {
 		zr.SetPassword(password)
@@ -842,8 +849,14 @@ func readDirectoryHeader(f *File, r io.Reader) error {
 	packVer := f.CreatorVersion & 0xFF
 
 	f.Name = zipcharset.DecodeText(rawName, isUTF8, packOS, packVer, f.Extra, false)
+	if !utf8.ValidString(f.Name) {
+		f.Name = decodeUTF8OrMap([]byte(f.Name))
+	}
 	f.Name = strings.ReplaceAll(f.Name, "\\", "/")
 	f.Comment = zipcharset.DecodeText(rawComment, isUTF8, packOS, packVer, f.Extra, true)
+	if !utf8.ValidString(f.Comment) {
+		f.Comment = decodeUTF8OrMap([]byte(f.Comment))
+	}
 
 	utf8Valid1, utf8Require1 := detectUTF8(f.Name)
 	utf8Valid2, utf8Require2 := detectUTF8(f.Comment)

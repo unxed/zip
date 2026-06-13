@@ -2,6 +2,7 @@ package zip
 
 import (
     "os"
+    "hash/crc32"
 	"io/fs"
 	"encoding/binary"
 	"path"
@@ -151,6 +152,10 @@ type FileHeader struct {
 	// WinZip AES encryption
 	Password    string
 	AESStrength byte // 1 = 128, 2 = 192, 3 = 256. Defaults to 3 (AES-256) if Password != ""
+}
+
+func (h *FileHeader) SetComment(comment string) {
+	h.Comment = comment
 }
 
 func (h *FileHeader) FileInfo() fs.FileInfo {
@@ -351,6 +356,23 @@ func (fh *FileHeader) injectAutoExtras() uint16 {
 	// 3.4 Unix Owner/Group Strings (0x7812)
 	if (fh.Uname != "" || fh.Gname != "") && !hasTag(unixOwnerNameExtraID) {
 		fh.Extra = appendUnixOwnerNamesExtra(fh.Extra, fh.Uname, fh.Gname)
+	}
+
+	// 3.5 Unicode Comment (0x6375)
+	if fh.Comment != "" && !hasTag(unicodeCommentExtraID) {
+		commentBytes := []byte(fh.Comment)
+		crc := crc32.ChecksumIEEE([]byte(fh.Comment))
+
+		payload := make([]byte, 5+len(commentBytes))
+		payload[0] = 1 // Version
+		binary.LittleEndian.PutUint32(payload[1:5], crc)
+		copy(payload[5:], commentBytes)
+
+		buf := make([]byte, 4+len(payload))
+		binary.LittleEndian.PutUint16(buf[0:2], unicodeCommentExtraID)
+		binary.LittleEndian.PutUint16(buf[2:4], uint16(len(payload)))
+		copy(buf[4:], payload)
+		fh.Extra = append(fh.Extra, buf...)
 	}
 
 	// 4. AES Encryption (0x9901)

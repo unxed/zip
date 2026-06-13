@@ -70,3 +70,6 @@ func lookupGroup(name string) (int, error) {
 	}
 	return strconv.Atoi(g.Gid)
 }
+func createWindowsSymlink(target, link string, isDir bool) error {
+	return nil // No-op on Unix, never called due to runtime.GOOS check
+}

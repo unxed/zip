@@ -440,20 +440,21 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 			if !strings.HasPrefix(path, prefix) && path != e.chroot {
 				return fmt.Errorf("%s cannot be extracted outside of chroot (%s)", path, e.chroot)
 			}
-
+			
 			if err := e.linksToDirs(path); err != nil {
 				return err
 			}
 
-			if err := os.MkdirAll(filepath.Dir(path), 0777); err != nil {
+			// Synthesize and guarantee parent directories structures
+			if err := e.synthesizeParentDirs(path); err != nil {
 				return err
 			}
 
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-
-			// Overwrite control policies
+            
+            // Overwrite control policies
 			if file.Mode()&os.ModeDir == 0 && file.Mode()&os.ModeSymlink == 0 && file.Linkname == "" {
 				if e.options.unlinkFirst {
 					os.RemoveAll(path) // Safer than os.Remove for preventing TOCTOU directory overwrites
@@ -476,21 +477,35 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 			case file.Mode()&os.ModeSymlink != 0 || file.Linkname != "" || strings.Contains(file.Name, ":"):
 				continue
 
-			case file.Mode().IsDir():
-				err = e.createDirectory(path, file)
+		case file.Mode().IsDir():
+			err = e.createDirectory(path, file)
 
-			case file.Mode()&irregularModes != 0:
-				limiter <- struct{}{}
-				gf := e.zr.File[i]
-				p := path
-				wg.Go(func() error {
-					defer func() { <-limiter }()
-					err := extractSpecialFile(p, &gf.FileHeader)
-					if err == nil {
-						err = e.updateFileMetadata(p, gf)
+		case file.Mode()&irregularModes != 0:
+			limiter <- struct{}{}
+			gf := e.zr.File[i]
+			p := path
+			wg.Go(func() error {
+				defer func() { <-limiter }()
+				// Parse 0x000d for devmajor/devminor if present
+				for extra := readBuf(gf.Extra); len(extra) >= 4; {
+					tag := extra.uint16()
+					size := int(extra.uint16())
+					if tag == unixExtraID && size >= 12 {
+						extra.uint32() // atime
+						extra.uint32() // mtime
+						extra.uint16() // uid
+						extra.uint16() // gid
+						gf.Devmajor = int64(extra.uint32())
+						gf.Devminor = int64(extra.uint32())
 					}
-					return err
-				})
+					extra = extra[size:]
+				}
+				err := extractSpecialFile(p, &gf.FileHeader)
+				if err == nil {
+					err = e.updateFileMetadata(p, gf)
+				}
+				return err
+			})
 
 			default:
 				limiter <- struct{}{}
@@ -542,10 +557,16 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 			}
 			path, err := filepath.Abs(filepath.Join(e.chroot, file.Name))
 			if err != nil {
+				if e.options.tolerant {
+					continue
+				}
 				return err
 			}
 			err = e.updateFileMetadata(path, file)
 			if err != nil {
+				if e.options.tolerant {
+					continue
+				}
 				return err
 			}
 		}
@@ -875,17 +896,27 @@ func (e *Extractor) createLink(path string, file *File) error {
 			return fmt.Errorf("zip: absolute symlink target not allowed: %s", target)
 		}
 
-			resolvedTarget := filepath.Clean(filepath.Join(filepath.Dir(path), target))
-			prefix := e.chroot
-			if !strings.HasSuffix(prefix, string(filepath.Separator)) {
-				prefix += string(filepath.Separator)
-			}
-			if !strings.HasPrefix(resolvedTarget, prefix) && resolvedTarget != e.chroot {
-				return fmt.Errorf("zip: symlink target escapes chroot: %s", target)
-			}
+		resolvedTarget := filepath.Clean(filepath.Join(filepath.Dir(path), target))
+		prefix := e.chroot
+		if !strings.HasSuffix(prefix, string(filepath.Separator)) {
+			prefix += string(filepath.Separator)
+		}
+		if !strings.HasPrefix(resolvedTarget, prefix) && resolvedTarget != e.chroot {
+			return fmt.Errorf("zip: symlink target escapes chroot: %s", target)
+		}
 
-		if err := os.Symlink(target, path); err != nil {
-			return err
+		if runtime.GOOS == "windows" {
+			isDir := false
+			if fi, err := os.Stat(filepath.Join(filepath.Dir(path), target)); err == nil {
+				isDir = fi.IsDir()
+			}
+			if err := createWindowsSymlink(target, path, isDir); err != nil {
+				return err
+			}
+		} else {
+			if err := os.Symlink(target, path); err != nil {
+				return err
+			}
 		}
 	} else if file.Linkname != "" {
 		targetPath := filepath.Join(e.chroot, file.Linkname)
@@ -1032,6 +1063,10 @@ func (e *Extractor) updateFileMetadata(path string, file *File) error {
 		applyNtfsAclFunc(path, file.Acl)
 	}
 
+	if strings.Contains(file.Name, MappedStringMarkStr) {
+		path = filepath.Join(filepath.Dir(path), string(encodeMappedString(file.Name)))
+	}
+
 	if e.options.xattrs {
 		applyXattrs(path, &file.FileHeader)
 	}
@@ -1092,6 +1127,55 @@ func (e *Extractor) linksToDirs(targetPath string) error {
 		if fi.Mode()&os.ModeSymlink != 0 {
 			if err := os.Remove(current); err != nil {
 				return err
+			}
+		}
+	}
+	return nil
+}
+// synthesizeParentDirs guarantees that all parent folders for the target path
+// exist on disk, recovering missing or corrupted directory headers on the fly,
+// while safely resolving path conflicts.
+func (e *Extractor) synthesizeParentDirs(targetPath string) error {
+	dir := filepath.Dir(targetPath)
+
+	// Fast path: ensure parent directory chain exists using standard OS tools
+	err := os.MkdirAll(dir, 0755)
+	if err == nil {
+		return nil
+	}
+
+	// If MkdirAll fails, it usually means a non-directory file is blocking one of the parent paths.
+	// We fall back to manual recursive path reconstruction.
+	if !strings.HasPrefix(targetPath, e.chroot) {
+		return nil
+	}
+	rel, errRel := filepath.Rel(e.chroot, targetPath)
+	if errRel != nil {
+		return errRel
+	}
+
+	parts := strings.Split(filepath.Clean(rel), string(filepath.Separator))
+	current := e.chroot
+
+	for i := 0; i < len(parts)-1; i++ {
+		current = filepath.Join(current, parts[i])
+		fi, errStat := os.Lstat(current)
+		if errStat != nil {
+			if os.IsNotExist(errStat) {
+				if errMk := os.Mkdir(current, 0755); errMk != nil && !os.IsExist(errMk) {
+					return errMk
+				}
+			} else {
+				return errStat
+			}
+		} else if !fi.IsDir() {
+			// Resolve conflict: remove blocking file and create directory
+			if errRm := os.Remove(current); errRm == nil {
+				if errMk := os.Mkdir(current, 0755); errMk != nil {
+					return errMk
+				}
+			} else {
+				return errRm
 			}
 		}
 	}

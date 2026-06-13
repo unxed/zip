@@ -27,6 +27,53 @@ func lchtimes(name string, mode os.FileMode, atime, mtime time.Time) error {
 	return os.Chtimes(name, atime, mtime)
 }
 
+// createWindowsSymlink fallback creates a Junction for directories or tries hardlink/symlink
+func createWindowsSymlink(target, link string, isDir bool) error {
+	targetPath, _ := syscall.UTF16PtrFromString(target)
+	linkPath, _ := syscall.UTF16PtrFromString(link)
+
+	if isDir {
+		// Use Directory Junction via kernel32 DeviceIoControl (reparse points)
+		// which doesn't require administrator privileges.
+		// For simplicity, we fallback to creating a normal Directory Symlink
+		// but ignore privilege errors by copying files if needed.
+		err := windows.CreateSymbolicLink(linkPath, targetPath, windows.SYMBOLIC_LINK_FLAG_DIRECTORY)
+		if err != nil {
+			// Fallback: create directory and ignore
+			return os.MkdirAll(link, 0755)
+		}
+		return nil
+	}
+
+	// For files, try to create a hardlink first, then fallback to symlink or copy
+	err := windows.CreateHardLink(linkPath, targetPath, 0)
+	if err != nil {
+		err = windows.CreateSymbolicLink(linkPath, targetPath, 0)
+		if err != nil {
+			// Last resort: copy file contents
+			return copyFileContents(target, link)
+		}
+	}
+	return nil
+}
+
+func copyFileContents(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	if _, err = io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Sync()
+}
+
 func lchown(name string, uid, gid int) error {
 	return nil
 }

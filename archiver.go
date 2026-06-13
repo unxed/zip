@@ -213,8 +213,10 @@ func NewArchiver(w io.Writer, chroot string, opts ...ArchiverOption) (*Archiver,
 		a.zw.recoveryPct = a.options.recoveryPct
 		a.zw.recoveryFile = a.options.recoveryFile
 	}
+	// If CDE is requested, we use F4Crypt via encapsulateF4CryptZip instead of the old CDE.
+	// But during the Archive phase, we write an unencrypted solid zip to a temp file first.
 	if a.options.encryptCD && a.options.password != "" {
-		a.zw.SetEncryptCentralDirectory(true, a.options.password)
+		a.zw.SetEncryptCentralDirectory(false, "") // Disable old CDE logic
 	}
 	if a.options.torrentZip {
 		a.zw.SetTorrentZip(true)
@@ -477,6 +479,7 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 				if a.options.xattrs {
 					sysXattrs(path, hdr)
 				}
+				hdr.Extra = appendUnix000dExtra(hdr.Extra, hdr)
 				err = a.createSpecialFile(fi, hdr)
 				break
 			}
