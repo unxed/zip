@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 
 	"github.com/unxed/zip/internal/filepool"
+	"github.com/klauspost/compress/flate"
+	"github.com/klauspost/compress/zstd"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -48,6 +50,15 @@ type archiverOptions struct {
 	torrentZip              bool
 	recoveryPct             int
 	recoveryFile            *os.File
+	level                   int
+}
+
+// WithArchiverLevel sets the compression level (1-9 for Deflate, 1-4 for ZSTD).
+func WithArchiverLevel(level int) ArchiverOption {
+	return func(o *archiverOptions) error {
+		o.level = level
+		return nil
+	}
 }
 
 func WithArchiverTorrentZip(b bool) ArchiverOption {
@@ -221,6 +232,19 @@ func NewArchiver(w io.Writer, chroot string, opts ...ArchiverOption) (*Archiver,
 	if a.options.torrentZip {
 		a.zw.SetTorrentZip(true)
 	}
+
+	if a.options.level != 0 {
+		if a.options.method == Deflate {
+			a.zw.RegisterCompressor(Deflate, func(w io.Writer) (io.WriteCloser, error) {
+				return flate.NewWriter(w, a.options.level)
+			})
+		} else if a.options.method == ZSTD {
+			a.zw.RegisterCompressor(ZSTD, func(w io.Writer) (io.WriteCloser, error) {
+				return zstd.NewWriter(w, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(a.options.level)))
+			})
+		}
+	}
+
 	return a, nil
 }
 
