@@ -486,20 +486,6 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 			p := path
 			wg.Go(func() error {
 				defer func() { <-limiter }()
-				// Parse 0x000d for devmajor/devminor if present
-				for extra := readBuf(gf.Extra); len(extra) >= 4; {
-					tag := extra.uint16()
-					size := int(extra.uint16())
-					if tag == unixExtraID && size >= 12 {
-						extra.uint32() // atime
-						extra.uint32() // mtime
-						extra.uint16() // uid
-						extra.uint16() // gid
-						gf.Devmajor = int64(extra.uint32())
-						gf.Devminor = int64(extra.uint32())
-					}
-					extra = extra[size:]
-				}
 				err := extractSpecialFile(p, &gf.FileHeader)
 				if err == nil {
 					err = e.updateFileMetadata(p, gf)

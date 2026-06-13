@@ -134,6 +134,17 @@ func NewUpdater(rws io.ReadWriteSeeker) (*Updater, error) {
 	if strings.Contains(zu.comment, "[F4LOCKED]") {
 		return nil, ErrArchiveLocked
 	}
+
+	// Prevent accidental corruption of F4Crypt encapsulated ZIP archives
+	if size >= 24 {
+		var footer [8]byte
+		if _, err := zu.rw.ReadAt(footer[:], size-8); err == nil {
+			if string(footer[:]) == "F4IDX\x00\x00\x00" {
+				return nil, errors.New("zip: in-place updating of F4Crypt encapsulated archives is not supported")
+			}
+		}
+	}
+
 	return zu, nil
 }
 
