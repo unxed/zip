@@ -55,32 +55,34 @@ type File struct {
 	aesInfo      *winzipAesInfo
 }
 
-// OpenReaderWithPassword opens a ZIP file with a password for Central Directory Encryption.
 func OpenReaderWithPassword(name string, password string) (*ReadCloser, error) {
 	mvr, size, err := OpenMultiVolume(name, os.O_RDONLY)
 	if err != nil {
 		return nil, err
 	}
-	var ra io.ReaderAt = mvr
-	ra, size, err = checkF4Recovery(ra, size)
+	ra, size, err := checkF4Recovery(mvr, size)
 	if err != nil {
 		mvr.Close()
 		return nil, err
 	}
 
-	r := new(ReadCloser)
-	if password != "" {
-		r.SetPassword(password)
-	}
-	if err = r.init(ra, size); err != nil {
+	raDec, sizeDec, err := checkF4CryptZip(ra, size, password)
+	if err != nil {
 		mvr.Close()
 		return nil, err
 	}
 
-	r.f = mvr.files[len(mvr.files)-1]
-	r.Reader.r = ra
+	zr := new(ReadCloser)
+	if password != "" {
+		zr.SetPassword(password)
+	}
+	if err = zr.init(raDec, sizeDec); err != nil {
+		mvr.Close()
+		return nil, err
+	}
 
-	return r, nil
+	zr.Reader.r = raDec
+	return zr, nil
 }
 
 func OpenReader(name string) (*ReadCloser, error) {

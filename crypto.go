@@ -305,7 +305,10 @@ func checkF4CryptZip(ra io.ReaderAt, size int64, password string) (io.ReaderAt, 
 	key := cHdr.DeriveKey(password)
 
 	// Open the payload stream directly
-	pOff, _ := payloadFile.DataOffset()
+	pOff, err := payloadFile.DataOffset()
+	if err != nil {
+		return nil, 0, err
+	}
 	payloadSection := io.NewSectionReader(sr, pOff, int64(payloadFile.CompressedSize64))
 	decReader := newF4CryptReaderAt(payloadSection, key, cHdr.IV)
 
