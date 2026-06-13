@@ -225,6 +225,7 @@ func init() {
 	compressors.Store(Deflate, Compressor(func(w io.Writer) (io.WriteCloser, error) { return newFlateWriter(w), nil }))
 	compressors.Store(Deflate64, Compressor(func(w io.Writer) (io.WriteCloser, error) { return newDeflate64Writer(w), nil }))
 	compressors.Store(ZSTD, Compressor(newZstdWriter))
+	compressors.Store(LZMA, Compressor(func(w io.Writer) (io.WriteCloser, error) { return newLZMAWriter(w, 5) }))
 
 	decompressors.Store(Store, Decompressor(io.NopCloser))
 	decompressors.Store(Deflate, Decompressor(newFlateReader))
@@ -339,4 +340,77 @@ func decompressor(method uint16) Decompressor {
 		return nil
 	}
 	return di.(Decompressor)
+}
+
+type lzmaWriter struct {
+	w io.WriteCloser
+}
+
+func (lw *lzmaWriter) Write(p []byte) (int, error) { return lw.w.Write(p) }
+func (lw *lzmaWriter) Close() error               { return lw.w.Close() }
+
+type headerSwallower struct {
+	w     io.Writer
+	count int
+}
+
+func (s *headerSwallower) Write(p []byte) (int, error) {
+	if s.count < 13 {
+		skip := 13 - s.count
+		if len(p) <= skip {
+			s.count += len(p)
+			return len(p), nil
+		}
+		p = p[skip:]
+		s.count = 13
+		n, err := s.w.Write(p)
+		return n + skip, err
+	}
+	return s.w.Write(p)
+}
+
+func newLZMAWriter(w io.Writer, level int) (io.WriteCloser, error) {
+	// ZIP-LZMA Header (APPNOTE 5.8.8)
+	// 2 bytes: Version (9.0 -> 0x0900)
+	// 2 bytes: Properties Size (5 -> 0x0500)
+	header := []byte{0x09, 0x00, 0x05, 0x00}
+	if _, err := w.Write(header); err != nil {
+		return nil, err
+	}
+
+	// LZMA1 Properties (1 byte) + Dictionary Size (4 bytes)
+	// Default: lc=3, lp=0, pb=2 (0x5d)
+	dictSize := uint32(1 << 23)
+	if level > 0 {
+		dictSize = uint32(1 << (18 + level))
+	}
+
+	// 1. Write the 5-byte properties segment for ZIP Method 14
+	props := []byte{0x5d}
+	if err := binary.Write(w, binary.LittleEndian, props[0]); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(w, binary.LittleEndian, dictSize); err != nil {
+		return nil, err
+	}
+
+	// 2. Configure the LZMA encoder using correct field names from the library
+	config := lzma.WriterConfig{
+		DictCap: int(dictSize),
+		Properties: &lzma.Properties{
+			LC: 3,
+			LP: 0,
+			PB: 2,
+		},
+	}
+
+	// 3. Create a swallower to prevent lzma.NewWriter from writing its own
+	// 13-byte header, as we've already written the ZIP-compatible version.
+	swallower := &headerSwallower{w: w}
+	z, err := config.NewWriter(swallower)
+	if err != nil {
+		return nil, err
+	}
+
+	return &lzmaWriter{w: z}, nil
 }

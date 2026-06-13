@@ -242,6 +242,10 @@ func NewArchiver(w io.Writer, chroot string, opts ...ArchiverOption) (*Archiver,
 			a.zw.RegisterCompressor(ZSTD, func(w io.Writer) (io.WriteCloser, error) {
 				return zstd.NewWriter(w, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(a.options.level)))
 			})
+		} else if a.options.method == LZMA {
+			a.zw.RegisterCompressor(LZMA, func(w io.Writer) (io.WriteCloser, error) {
+				return newLZMAWriter(w, a.options.level)
+			})
 		}
 	}
 
