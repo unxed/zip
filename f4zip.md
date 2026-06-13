@@ -68,6 +68,26 @@ A control file stored within the archive to facilitate "incremental restore" or 
 
 **Behavior:**
 During extraction with "incremental" mode enabled, any file present in the target directory but *NOT* listed in `.zip_dumpdir` SHOULD be deleted.
+### 2.6. Windows Security Descriptors (NTFS ACLs - Extra Field `0x4453`)
+Encodes Windows NT Security Descriptors (ACLs) to preserve file security permissions across Windows environments.
+
+**Header ID:** `0x4453`
+**Data Layout:**
+- `[SecurityDescriptor]`: Variable length raw binary representing the Windows Security Descriptor.
+
+**Methodological Recommendations:**
+- **OS Dependency:** This field is written and read natively on Windows using APIs like `GetFileSecurityW` and `SetFileSecurityW`. On non-Windows platforms, it SHOULD be preserved within the extra fields during copy operations but is typically ignored on extraction.
+
+### 2.7. Hardlinks and Special Device Files (Extra Field `0x000d` Extension)
+Extends the standard Info-ZIP UNIX extra field `0x000d` to preserve POSIX hardlink targets and special device nodes (character devices, block devices, and named pipes/FIFOs).
+
+**Header ID:** `0x000d`
+**Data Layout:**
+The standard `0x000d` extra block header is followed by a variable data payload:
+- **Hardlinks:** If the entry represents a hardlink, the payload contains the relative path to the target file.
+- **Device Nodes:** If the entry represents a block or character device, the payload is an 8-byte block containing:
+  - `[DevMajor]`: 4 bytes (Little Endian)
+  - `[DevMinor]`: 4 bytes (Little Endian)
 
 ## 3. Guidelines for Archiver Developers
 1. **Path Normalization:** Always use `/` as the path separator in `0x7811` keys and filenames, regardless of the host OS.
