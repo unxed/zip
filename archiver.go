@@ -224,6 +224,11 @@ func NewArchiver(w io.Writer, chroot string, opts ...ArchiverOption) (*Archiver,
 	return a, nil
 }
 
+// SetComment sets the global archive comment in the Central Directory.
+func (a *Archiver) SetComment(comment string) error {
+	return a.zw.SetComment(comment)
+}
+
 func (a *Archiver) Close() error {
 	return a.zw.Close()
 }
