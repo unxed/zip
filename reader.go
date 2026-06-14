@@ -66,7 +66,7 @@ func OpenReaderWithPassword(name string, password string) (*ReadCloser, error) {
 		return nil, err
 	}
 
-	raDec, sizeDec, err := checkF4CryptZip(ra, size, password)
+	raDec, sizeDec, err := checkXCryptZip(ra, size, password)
 	if err != nil {
 		mvr.Close()
 		return nil, err
@@ -98,7 +98,7 @@ func NewReaderWithPassword(r io.ReaderAt, size int64, password string) (*Reader,
 		return nil, err
 	}
 
-	r, size, err = checkF4CryptZip(r, size, password)
+	r, size, err = checkXCryptZip(r, size, password)
 	if err != nil {
 		return nil, err
 	}

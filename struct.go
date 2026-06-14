@@ -70,7 +70,8 @@ const (
 	//                      0x7815 // Reserved for further f4 extensions versions
 	//                      0x7816 // Reserved for further f4 extensions versions
 	unixOwnerNameExtraID  = 0x7817 // f4 extensions: Unix owner/group string names
-	//                             // 0x7818..0x7854 unused
+	xcryptExtraID         = 0x7819 // f4 extensions: XCrypt encryption extra field
+	//                             // 0x781a..0x7854 unused
 	//                      0x7855 // Info-ZIP UNIX (new)
 	//                      0x7875 // Info-ZIP UNIX (newer UID/GID)
 	winzipAesExtraID      = 0x9901 // WinZip AES encryption extra field
