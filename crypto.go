@@ -187,11 +187,17 @@ func (cr *xCryptReaderAt) ReadAt(p []byte, off int64) (int, error) {
 }
 
 func encapsulateXCryptZip(finalPath, tempPath, password string) error {
-	out, err := os.Create(finalPath)
-	if err != nil {
-		return err
+	var out *os.File
+	var err error
+	if finalPath == "-" {
+		out = os.Stdout
+	} else {
+		out, err = os.Create(finalPath)
+		if err != nil {
+			return err
+		}
+		defer out.Close()
 	}
-	defer out.Close()
 
 	zw := NewWriter(out)
 
