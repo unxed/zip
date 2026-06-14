@@ -370,6 +370,10 @@ func (f *File) Open() (io.ReadCloser, error) {
 		}
 		desr = io.NewSectionReader(f.zipr, f.headerOffset+bodyOffset+size, ddLen)
 	}
+	rc = &limitReadCloser{
+		Reader: io.LimitReader(rc, int64(f.UncompressedSize64)),
+		Closer: rc,
+	}
 	rc = &checksumReader{
 		rc:   rc,
 		rr:   rr,
@@ -378,6 +382,11 @@ func (f *File) Open() (io.ReadCloser, error) {
 		desr: desr,
 	}
 	return rc, nil
+}
+
+type limitReadCloser struct {
+	io.Reader
+	io.Closer
 }
 
 func (f *File) OpenRaw() (io.Reader, error) {
