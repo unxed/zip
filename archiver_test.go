@@ -107,29 +107,39 @@ func TestArchiverAndExtractor(t *testing.T) {
 	}
 }
 
-func TestArchiver_ChrootViolation(t *testing.T) {
+func TestArchiver_OutsideChrootNormalization(t *testing.T) {
 	tmp := t.TempDir()
 	chroot := filepath.Join(tmp, "inside")
 	os.Mkdir(chroot, 0755)
 
 	outsideFile := filepath.Join(tmp, "outside.txt")
-	os.WriteFile(outsideFile, []byte("danger"), 0644)
+	os.WriteFile(outsideFile, []byte("safe"), 0644)
 
-	f, _ := os.Create(filepath.Join(tmp, "test.zip"))
-	defer f.Close()
+	zipPath := filepath.Join(tmp, "test.zip")
+	f, _ := os.Create(zipPath)
 
 	a, _ := NewArchiver(f, chroot)
+	info, _ := os.Stat(outsideFile)
 	files := map[string]os.FileInfo{
-		outsideFile: nil, // This should trigger the prefix check
+		outsideFile: info,
 	}
 
-	// We need a real FileInfo for the check
-	info, _ := os.Stat(outsideFile)
-	files[outsideFile] = info
-
 	err := a.Archive(context.Background(), files)
-	if err == nil || !strings.Contains(err.Error(), "outside of chroot") {
-		t.Errorf("expected chroot violation error, got: %v", err)
+	if err != nil {
+		t.Fatalf("expected successful archive with normalized path, got: %v", err)
+	}
+	a.Close()
+	f.Close()
+
+	zr, _ := OpenReader(zipPath)
+	defer zr.Close()
+
+	if len(zr.File) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(zr.File))
+	}
+
+	if filepath.IsAbs(zr.File[0].Name) || strings.HasPrefix(zr.File[0].Name, "../") {
+		t.Errorf("path was not safely normalized: %s", zr.File[0].Name)
 	}
 }
 func TestArchiver_SkipIrregularFiles(t *testing.T) {

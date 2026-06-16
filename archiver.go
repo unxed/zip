@@ -5,7 +5,6 @@ import (
 	"errors"
 	"bufio"
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -425,8 +424,12 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 	if len(files) < concurrency {
 		concurrency = len(files)
 	}
-	if concurrency > 1 {
-		fp, err = filepool.New(a.options.stageDir, concurrency, a.options.bufferSize)
+	if concurrency > 1 || a.options.torrentZip {
+		poolSize := concurrency
+		if poolSize < 1 {
+			poolSize = 1
+		}
+		fp, err = filepool.New(a.options.stageDir, poolSize, a.options.bufferSize)
 		if err != nil {
 			return err
 		}
@@ -453,17 +456,14 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 			return err
 		}
 
-		prefix := a.chroot
-		if !strings.HasSuffix(prefix, string(filepath.Separator)) {
-			prefix += string(filepath.Separator)
-		}
-		if !strings.HasPrefix(path, prefix) && path != a.chroot {
-			return fmt.Errorf("%s cannot be archived from outside of chroot (%s)", name, a.chroot)
-		}
-
 		rel, err := filepath.Rel(a.chroot, path)
-		if err != nil {
-			return err
+		if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+			rel = filepath.ToSlash(path)
+			vol := filepath.VolumeName(path)
+			if vol != "" {
+				rel = strings.TrimPrefix(rel, filepath.ToSlash(vol))
+			}
+			rel = strings.TrimPrefix(rel, "/")
 		}
 
 		hdr := &hdrs[i]
@@ -537,12 +537,18 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 				p := path
 				fInfo := fi
 				h := hdr
-				wg.Go(func() error {
-					err := a.createFile(ctx, p, fInfo, h, f)
+				if concurrency == 1 {
+					err = a.createFile(ctx, p, fInfo, h, f)
 					fp.Put(f)
 					incOnSuccess(&a.entries, err)
-					return err
-				})
+				} else {
+					wg.Go(func() error {
+						err := a.createFile(ctx, p, fInfo, h, f)
+						fp.Put(f)
+						incOnSuccess(&a.entries, err)
+						return err
+					})
+				}
 			}
 		}
 
