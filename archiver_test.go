@@ -444,3 +444,39 @@ func TestArchiver_SolidSeekIndex(t *testing.T) {
 		t.Fatalf("Read from seekable stream failed")
 	}
 }
+func TestArchiver_DifferentDrivesWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-only test")
+	}
+
+	tmp := t.TempDir()
+	archivePath := filepath.Join(tmp, "different_drives.zip")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	a, err := NewArchiver(f, tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	currentDrive := filepath.VolumeName(tmp)
+	targetDrive := "D:"
+	if currentDrive == "D:" || currentDrive == "d:" {
+		targetDrive = "C:"
+	}
+
+	targetPath := targetDrive + `\dummy_dir`
+
+	files := map[string]os.FileInfo{
+		targetPath: mockFileInfo{name: "dummy_dir", mode: os.ModeDir | 0755},
+	}
+
+	err = a.Archive(context.Background(), files)
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+}

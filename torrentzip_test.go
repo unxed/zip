@@ -79,3 +79,14 @@ func TestArchiver_TorrentZip(t *testing.T) {
 		}
 	}
 }
+
+func TestWithArchiverTorrentZip_SetsLevel9(t *testing.T) {
+	opts := &archiverOptions{}
+	opt := WithArchiverTorrentZip(true)
+	if err := opt(opts); err != nil {
+		t.Fatal(err)
+	}
+	if opts.level != 9 {
+		t.Errorf("expected level 9, got %d", opts.level)
+	}
+}

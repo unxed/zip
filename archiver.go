@@ -66,6 +66,7 @@ func WithArchiverTorrentZip(b bool) ArchiverOption {
 		if b {
 			o.method = Deflate
 			o.concurrency = 1
+			o.level = 9
 		}
 		return nil
 	}
@@ -464,6 +465,7 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 				rel = strings.TrimPrefix(rel, filepath.ToSlash(vol))
 			}
 			rel = strings.TrimPrefix(rel, "/")
+			err = nil
 		}
 
 		hdr := &hdrs[i]
