@@ -58,7 +58,9 @@ type header struct {
 }
 
 func NewWriter(w io.Writer) *Writer {
-	return &Writer{cw: &countWriter{w: bufio.NewWriter(w)}}
+	// Увеличиваем буфер до 2МБ для предотвращения метаданного шторма на NTFS.
+	// Это позволяет объединить запись сотен заголовков в один системный вызов.
+	return &Writer{cw: &countWriter{w: bufio.NewWriterSize(w, 2*1024*1024)}}
 }
 
 func (w *Writer) SetOffset(n int64) {
