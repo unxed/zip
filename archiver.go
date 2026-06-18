@@ -24,9 +24,15 @@ const irregularModes = os.ModeSocket | os.ModeDevice | os.ModeCharDevice | os.Mo
 
 var ErrMinConcurrency = errors.New("concurrency must be at least 1")
 
+var copyBufPool = sync.Pool{
+	New: func() interface{} {
+		return make([]byte, 128*1024)
+	},
+}
+// Увеличиваем буфер чтения до 1 МБ для более быстрого I/O с диска
 var bufioReaderPool = sync.Pool{
 	New: func() interface{} {
-		return bufio.NewReaderSize(nil, 32*1024)
+		return bufio.NewReaderSize(nil, 1024*1024)
 	},
 }
 
@@ -305,7 +311,7 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 					innerZw.Close()
 					return err
 				}
-				rel, err := filepath.Rel(a.chroot, path)
+                rel, err := filepath.Rel(a.chroot, path)
 				if err != nil {
 					innerZw.Close()
 					return err
@@ -453,9 +459,9 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 		}
 	}()
 
-	hdrs := make([]FileHeader, len(names))
+	limiter := make(chan struct{}, concurrency)
 
-	for i, name := range names {
+	for _, name := range names {
 		fi := files[name]
 		if fi.Mode()&os.ModeSocket != 0 {
 			continue
@@ -467,7 +473,6 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 		}
 
 		var rel string
-		var err error
 		if a.options.pathMapping != nil && a.options.pathMapping[path] != "" {
 			rel = a.options.pathMapping[path]
 		} else {
@@ -483,8 +488,8 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 			}
 		}
 
-		hdr := &hdrs[i]
-		a.fileInfoHeaderFast(rel, fi, hdr)
+		var hdr FileHeader
+		a.fileInfoHeaderFast(rel, fi, &hdr)
 
 		if a.options.xattrs {
 			if acl, err := getFileSecurityFunc(path); err == nil && len(acl) > 0 {
@@ -499,15 +504,15 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 		switch {
 		case hdr.Mode()&os.ModeSymlink != 0:
 			if a.options.xattrs {
-				sysXattrs(path, hdr)
+				sysXattrs(path, &hdr)
 			}
-			err = a.createSymlink(path, fi, hdr)
+			err = a.createSymlink(path, fi, &hdr)
 
 		case hdr.Mode().IsDir():
 			if a.options.xattrs {
-				sysXattrs(path, hdr)
+				sysXattrs(path, &hdr)
 			}
-			err = a.createDirectory(fi, hdr)
+			err = a.createDirectory(fi, &hdr)
 
 		default:
 			link := getHardLinkTarget(fi, a.seenHardLinks)
@@ -518,28 +523,35 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 				hdr.UncompressedSize64 = 0
 				hdr.CRC32 = 0
 				if a.options.xattrs {
-					sysXattrs(path, hdr)
+					sysXattrs(path, &hdr)
 				}
-				err = a.createHardlink(fi, hdr)
+				err = a.createHardlink(fi, &hdr)
 				break
 			}
 			rememberHardLink(fi, rel, a.seenHardLinks)
 
 			if hdr.Mode()&irregularModes != 0 {
-				hdr.Method = Store
-				hdr.CompressedSize64 = 0
-				hdr.UncompressedSize64 = 0
-				hdr.CRC32 = 0
-				if a.options.xattrs {
-					sysXattrs(path, hdr)
-				}
-				hdr.Extra = appendUnix000dExtra(hdr.Extra, hdr)
-				err = a.createSpecialFile(fi, hdr)
+				limiter <- struct{}{}
+				h, p, fInfo := hdr, path, fi
+				wg.Go(func() error {
+					defer func() { <-limiter }()
+					h.Method = Store
+					h.CompressedSize64 = 0
+					h.UncompressedSize64 = 0
+					h.CRC32 = 0
+					if a.options.xattrs {
+						sysXattrs(p, &h)
+					}
+					h.Extra = appendUnix000dExtra(h.Extra, &h)
+					err := a.createSpecialFile(fInfo, &h)
+					incOnSuccess(&a.entries, err)
+					return err
+				})
 				break
 			}
 
 			if a.options.xattrs {
-				sysXattrs(path, hdr)
+				sysXattrs(path, &hdr)
 			}
 
 			if hdr.UncompressedSize64 > 0 {
@@ -547,7 +559,7 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 			}
 
 			if fp == nil {
-				err = a.createFile(ctx, path, fi, hdr, nil)
+				err = a.createFile(ctx, path, fi, &hdr, nil)
 				incOnSuccess(&a.entries, err)
 			} else {
 				f := fp.Get()
@@ -555,12 +567,14 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 				fInfo := fi
 				h := hdr
 				if concurrency == 1 {
-					err = a.createFile(ctx, p, fInfo, h, f)
+					err = a.createFile(ctx, p, fInfo, &h, f)
 					fp.Put(f)
 					incOnSuccess(&a.entries, err)
 				} else {
+					limiter <- struct{}{}
 					wg.Go(func() error {
-						err := a.createFile(ctx, p, fInfo, h, f)
+						defer func() { <-limiter }()
+						err := a.createFile(ctx, p, fInfo, &h, f)
 						fp.Put(f)
 						incOnSuccess(&a.entries, err)
 						return err
@@ -679,7 +693,12 @@ func (a *Archiver) compressFile(ctx context.Context, f *os.File, fi os.FileInfo,
 	}()
 	br.Reset(f)
 
-	_, err = io.Copy(io.MultiWriter(fw, tmp.Hasher()), br)
+	// Используем умеренный буфер (128КБ), чтобы не перегружать RAM при
+	// большом количестве параллельных потоков.
+	copyBufInterface := copyBufPool.Get()
+	copyBuf := copyBufInterface.([]byte)
+	_, err = io.CopyBuffer(io.MultiWriter(fw, tmp.Hasher()), br, copyBuf)
+	copyBufPool.Put(copyBufInterface)
 	dclose(fw, &err)
 	if err != nil {
 		return err

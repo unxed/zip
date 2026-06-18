@@ -102,6 +102,7 @@ type xCryptWriter struct {
 	w      io.Writer
 	stream cipher.Stream
 	mac    hash.Hash
+	buf    []byte
 }
 
 func newXCryptWriter(w io.Writer, key, iv []byte) (*xCryptWriter, error) {
@@ -120,7 +121,11 @@ func newXCryptWriter(w io.Writer, key, iv []byte) (*xCryptWriter, error) {
 }
 
 func (cw *xCryptWriter) Write(p []byte) (int, error) {
-	enc := make([]byte, len(p))
+	// Переиспользуем буфер, чтобы избежать аллокации (например, 2 МБ) на каждую запись
+	if cap(cw.buf) < len(p) {
+		cw.buf = make([]byte, len(p))
+	}
+	enc := cw.buf[:len(p)]
 	cw.stream.XORKeyStream(enc, p)
 	cw.mac.Write(enc)
 	return cw.w.Write(enc)
@@ -235,7 +240,8 @@ func encapsulateXCryptZip(finalPath, tempPath, password string) error {
 		return err
 	}
 	cw, _ := newXCryptWriter(pw, key, cHdr.IV)
-	io.Copy(cw, in)
+	// Используем 1МБ буфер вместо дефолтных 32КБ для инкапсуляции
+	io.CopyBuffer(cw, in, make([]byte, 1024*1024))
 	in.Close()
 
 	cHdr.MAC = cw.MAC()

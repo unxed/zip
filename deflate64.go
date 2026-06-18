@@ -26,7 +26,7 @@ func newDeflate64Reader(r io.Reader) io.ReadCloser {
 	return &deflate64Reader{
 		r:     r,
 		im:    newInflaterManaged(),
-		inBuf: make([]byte, 4096),
+		inBuf: make([]byte, 1024*1024), // 1MB read buffer for faster Deflate64 decoding
 	}
 }
 

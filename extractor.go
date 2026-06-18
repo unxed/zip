@@ -23,7 +23,7 @@ import (
 
 var bufioWriterPool = sync.Pool{
 	New: func() interface{} {
-		return bufio.NewWriterSize(nil, 32*1024)
+		return bufio.NewWriterSize(nil, 2*1024*1024)
 	},
 }
 
@@ -128,7 +128,7 @@ func WithExtractorSparse(b bool) ExtractorOption {
 
 var sparseBufPool = sync.Pool{
 	New: func() any {
-		return make([]byte, 32*1024)
+		return make([]byte, 1024*1024) // 1MB chunk for faster sparse operations
 	},
 }
 
@@ -375,7 +375,13 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 			if terr != nil {
 				return err
 			}
-			_, terr = io.Copy(tempFile, &ctxReader{r: r2, ctx: ctx})
+
+			// Используем наш 1МБ пул буферов вместо дефолтных 32КБ из io.Copy
+			bufInterface := sparseBufPool.Get()
+			buf := bufInterface.([]byte)
+			_, terr = io.CopyBuffer(tempFile, &ctxReader{r: r2, ctx: ctx}, buf)
+			sparseBufPool.Put(bufInterface)
+
 			r2.Close()
 			if terr != nil {
 				return err
@@ -767,7 +773,13 @@ func (e *Extractor) extractSolidStream(r io.Reader, ctx context.Context) error {
 
 			hasher := crc32.NewIEEE()
 			var limitR io.Reader = io.LimitReader(r, int64(uncompSize))
-			_, err = io.Copy(f, io.TeeReader(limitR, hasher))
+
+			// TeeReader ломает io.Copy, откатываясь к 32КБ. Форсируем 1МБ буфер.
+			bufInterface := sparseBufPool.Get()
+			buf := bufInterface.([]byte)
+			_, err = io.CopyBuffer(f, io.TeeReader(limitR, hasher), buf)
+			sparseBufPool.Put(bufInterface)
+
 			f.Close()
 			if err == nil && crc32Val != 0 && hasher.Sum32() != crc32Val {
 				err = ErrChecksum
@@ -995,19 +1007,11 @@ func (e *Extractor) createFile(ctx context.Context, path string, file *File) (er
 	if e.options.sparse {
 		err = copySparseZip(f, lr, file.UncompressedSize64, &e.written, ctx)
 	} else {
-		bw := bufioWriterPool.Get().(*bufio.Writer)
-		defer func() {
-			bw.Reset(nil)
-			bufioWriterPool.Put(bw)
-		}()
-
-		bw.Reset(&ctxCountWriter{f, &e.written, ctx})
-		_, err = bw.ReadFrom(lr)
-		if err != nil {
-			return err
-		}
-
-		err = bw.Flush()
+		// Гарантируем использование 1МБ буфера при распаковке
+		bufInterface := sparseBufPool.Get()
+		buf := bufInterface.([]byte)
+		_, err = io.CopyBuffer(&ctxCountWriter{f, &e.written, ctx}, lr, buf)
+		sparseBufPool.Put(bufInterface)
 	}
 
 	// If we read everything allowed by the limit, but data still remains in the source reader - it's a bomb

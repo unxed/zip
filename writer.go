@@ -58,7 +58,9 @@ type header struct {
 }
 
 func NewWriter(w io.Writer) *Writer {
-	return &Writer{cw: &countWriter{w: bufio.NewWriter(w)}}
+	// Уменьшаем буфер до 64КБ. Этого достаточно для заголовков,
+	// и это не создает задержек при записи.
+	return &Writer{cw: &countWriter{w: bufio.NewWriterSize(w, 64*1024)}}
 }
 
 func (w *Writer) SetOffset(n int64) {
@@ -656,7 +658,8 @@ func (w *Writer) Copy(f *File) error {
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(fw, r)
+	// Используем 1MB буфер вместо дефолтных 32KB для Raw Copy
+	_, err = io.CopyBuffer(fw, r, make([]byte, 1024*1024))
 	return err
 }
 
@@ -668,6 +671,7 @@ func (w *Writer) RegisterCompressor(method uint16, comp Compressor) {
 }
 
 func (w *Writer) AddFS(fsys fs.FS) error {
+	copyBuf := make([]byte, 1024*1024) // 1MB буфер вместо дефолтных 32КБ
 	return fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -703,7 +707,7 @@ func (w *Writer) AddFS(fsys fs.FS) error {
 			return err
 		}
 		defer f.Close()
-		_, err = io.Copy(fw, f)
+		_, err = io.CopyBuffer(fw, f, copyBuf)
 		return err
 	})
 }

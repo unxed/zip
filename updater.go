@@ -354,7 +354,7 @@ func (u *Updater) RemoveFile(dirIndex int) (int64, error) {
 	}
 	var size = end - start
 
-	const chunkBufSize = 32 * 1024
+	const chunkBufSize = 2 * 1024 * 1024 // 2MB для быстрого сдвига
 	var buffer = make([]byte, chunkBufSize)
 	var rp int64 = end
 	var wp int64 = start

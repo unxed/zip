@@ -69,7 +69,7 @@ func copyFileContents(src, dst string) error {
 		return err
 	}
 	defer out.Close()
-	if _, err = io.Copy(out, in); err != nil {
+	if _, err = io.CopyBuffer(out, in, make([]byte, 1024*1024)); err != nil {
 		return err
 	}
 	return out.Sync()
