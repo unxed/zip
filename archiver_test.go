@@ -319,10 +319,10 @@ func TestArchiver_ContextCancellation(t *testing.T) {
 func TestArchiver_InvalidStageDir(t *testing.T) {
 	tmp := t.TempDir()
 	srcDir := filepath.Join(tmp, "src")
-	os.Mkdir(srcDir, 0755)
+	os.MkdirAll(srcDir, 0755)
 	// Create two files to force the Archiver to use FilePool (since concurrency=2)
-	os.WriteFile(filepath.Join(srcDir, "test1.txt"), []byte("data1"), 0644)
-	os.WriteFile(filepath.Join(srcDir, "test2.txt"), []byte("data2"), 0644)
+	os.WriteFile(filepath.Join(srcDir, "test1.txt"), make([]byte, 5*1024*1024), 0644)
+	os.WriteFile(filepath.Join(srcDir, "test2.txt"), make([]byte, 5*1024*1024), 0644)
 
 	zipF, _ := os.Create(filepath.Join(tmp, "test.zip"))
 	defer zipF.Close()

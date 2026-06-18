@@ -558,7 +558,7 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 				hdr.Method = a.options.method
 			}
 
-			if fp == nil {
+			if fp == nil || fi.Size() < 32*1024 {
 				err = a.createFile(ctx, path, fi, &hdr, nil)
 				incOnSuccess(&a.entries, err)
 			} else {
