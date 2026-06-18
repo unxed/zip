@@ -21,10 +21,9 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// Увеличиваем буфер до 512 КБ. Это значительно ускоряет запись на NTFS
 var bufioWriterPool = sync.Pool{
 	New: func() interface{} {
-		return bufio.NewWriterSize(nil, 512*1024)
+		return bufio.NewWriterSize(nil, 2*1024*1024)
 	},
 }
 
@@ -129,7 +128,7 @@ func WithExtractorSparse(b bool) ExtractorOption {
 
 var sparseBufPool = sync.Pool{
 	New: func() any {
-		return make([]byte, 32*1024)
+		return make([]byte, 1024*1024) // 1MB chunk for faster sparse operations
 	},
 }
 

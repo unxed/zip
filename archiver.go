@@ -24,9 +24,10 @@ const irregularModes = os.ModeSocket | os.ModeDevice | os.ModeCharDevice | os.Mo
 
 var ErrMinConcurrency = errors.New("concurrency must be at least 1")
 
+// Увеличиваем буфер чтения до 1 МБ для более быстрого I/O с диска
 var bufioReaderPool = sync.Pool{
 	New: func() interface{} {
-		return bufio.NewReaderSize(nil, 32*1024)
+		return bufio.NewReaderSize(nil, 1024*1024)
 	},
 }
 
