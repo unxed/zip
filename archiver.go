@@ -24,6 +24,11 @@ const irregularModes = os.ModeSocket | os.ModeDevice | os.ModeCharDevice | os.Mo
 
 var ErrMinConcurrency = errors.New("concurrency must be at least 1")
 
+var copyBufPool = sync.Pool{
+	New: func() interface{} {
+		return make([]byte, 128*1024)
+	},
+}
 // Увеличиваем буфер чтения до 1 МБ для более быстрого I/O с диска
 var bufioReaderPool = sync.Pool{
 	New: func() interface{} {
@@ -690,8 +695,10 @@ func (a *Archiver) compressFile(ctx context.Context, f *os.File, fi os.FileInfo,
 
 	// Используем умеренный буфер (128КБ), чтобы не перегружать RAM при
 	// большом количестве параллельных потоков.
-	copyBuf := make([]byte, 128*1024)
+	copyBufInterface := copyBufPool.Get()
+	copyBuf := copyBufInterface.([]byte)
 	_, err = io.CopyBuffer(io.MultiWriter(fw, tmp.Hasher()), br, copyBuf)
+	copyBufPool.Put(copyBufInterface)
 	dclose(fw, &err)
 	if err != nil {
 		return err

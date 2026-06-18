@@ -88,7 +88,9 @@ func limitCodeLengths(lengths []byte, maxDepth int) {
 	var count [33]int
 	for _, l := range lengths {
 		if l > 0 {
-			count[l]++
+			if int(l) < len(count) {
+				count[l]++
+			}
 		}
 	}
 
