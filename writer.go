@@ -658,7 +658,8 @@ func (w *Writer) Copy(f *File) error {
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(fw, r)
+	// Используем 1MB буфер вместо дефолтных 32KB для Raw Copy
+	_, err = io.CopyBuffer(fw, r, make([]byte, 1024*1024))
 	return err
 }
 
@@ -670,6 +671,7 @@ func (w *Writer) RegisterCompressor(method uint16, comp Compressor) {
 }
 
 func (w *Writer) AddFS(fsys fs.FS) error {
+	copyBuf := make([]byte, 1024*1024) // 1MB буфер вместо дефолтных 32КБ
 	return fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -705,7 +707,7 @@ func (w *Writer) AddFS(fsys fs.FS) error {
 			return err
 		}
 		defer f.Close()
-		_, err = io.Copy(fw, f)
+		_, err = io.CopyBuffer(fw, f, copyBuf)
 		return err
 	})
 }

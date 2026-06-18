@@ -688,7 +688,9 @@ func (a *Archiver) compressFile(ctx context.Context, f *os.File, fi os.FileInfo,
 	}()
 	br.Reset(f)
 
-	_, err = io.Copy(io.MultiWriter(fw, tmp.Hasher()), br)
+	// MultiWriter не поддерживает WriteTo/ReadFrom, форсируем 1МБ буфер
+	copyBuf := make([]byte, 1024*1024)
+	_, err = io.CopyBuffer(io.MultiWriter(fw, tmp.Hasher()), br, copyBuf)
 	dclose(fw, &err)
 	if err != nil {
 		return err

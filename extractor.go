@@ -375,7 +375,13 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 			if terr != nil {
 				return err
 			}
-			_, terr = io.Copy(tempFile, &ctxReader{r: r2, ctx: ctx})
+
+			// Используем наш 1МБ пул буферов вместо дефолтных 32КБ из io.Copy
+			bufInterface := sparseBufPool.Get()
+			buf := bufInterface.([]byte)
+			_, terr = io.CopyBuffer(tempFile, &ctxReader{r: r2, ctx: ctx}, buf)
+			sparseBufPool.Put(bufInterface)
+
 			r2.Close()
 			if terr != nil {
 				return err
@@ -767,7 +773,13 @@ func (e *Extractor) extractSolidStream(r io.Reader, ctx context.Context) error {
 
 			hasher := crc32.NewIEEE()
 			var limitR io.Reader = io.LimitReader(r, int64(uncompSize))
-			_, err = io.Copy(f, io.TeeReader(limitR, hasher))
+
+			// TeeReader ломает io.Copy, откатываясь к 32КБ. Форсируем 1МБ буфер.
+			bufInterface := sparseBufPool.Get()
+			buf := bufInterface.([]byte)
+			_, err = io.CopyBuffer(f, io.TeeReader(limitR, hasher), buf)
+			sparseBufPool.Put(bufInterface)
+
 			f.Close()
 			if err == nil && crc32Val != 0 && hasher.Sum32() != crc32Val {
 				err = ErrChecksum
