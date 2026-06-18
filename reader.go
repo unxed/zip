@@ -27,6 +27,8 @@ var (
 	ErrChecksum     = errors.New("zip: checksum error")
 	ErrInsecurePath = errors.New("zip: insecure file path")
 )
+// DisableInsecurePaths controls whether paths containing ".." or "\" are rejected.
+var DisableInsecurePaths bool
 
 type Reader struct {
 	r             io.ReaderAt
@@ -244,7 +246,7 @@ func (r *Reader) init(rdr io.ReaderAt, size int64) error {
 	if uint16(len(r.File)) != uint16(end.directoryRecords) {
 		return err
 	}
-	if os.Getenv("GODEBUG") == "zipinsecurepath=0" {
+	if DisableInsecurePaths {
 		for _, f := range r.File {
 			if f.Name == "" {
 				continue
