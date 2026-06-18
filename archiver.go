@@ -688,8 +688,9 @@ func (a *Archiver) compressFile(ctx context.Context, f *os.File, fi os.FileInfo,
 	}()
 	br.Reset(f)
 
-	// MultiWriter не поддерживает WriteTo/ReadFrom, форсируем 1МБ буфер
-	copyBuf := make([]byte, 1024*1024)
+	// Используем умеренный буфер (128КБ), чтобы не перегружать RAM при
+	// большом количестве параллельных потоков.
+	copyBuf := make([]byte, 128*1024)
 	_, err = io.CopyBuffer(io.MultiWriter(fw, tmp.Hasher()), br, copyBuf)
 	dclose(fw, &err)
 	if err != nil {
