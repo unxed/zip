@@ -227,7 +227,7 @@ func (r *Reader) init(rdr io.ReaderAt, size int64) error {
 		}
 	}
 
-	buf := bufio.NewReader(rd)
+	buf := bufio.NewReaderSize(rd, 1024*1024)
 
 	for {
 		f := &File{zip: r, zipr: rdr}

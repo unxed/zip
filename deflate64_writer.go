@@ -18,7 +18,7 @@ type bitWriter struct {
 
 func newBitWriter(w io.Writer) *bitWriter {
 	return &bitWriter{
-		w: bufio.NewWriterSize(w, 32*1024),
+		w: bufio.NewWriterSize(w, 1024*1024),
 	}
 }
 
