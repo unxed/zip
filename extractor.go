@@ -1007,19 +1007,11 @@ func (e *Extractor) createFile(ctx context.Context, path string, file *File) (er
 	if e.options.sparse {
 		err = copySparseZip(f, lr, file.UncompressedSize64, &e.written, ctx)
 	} else {
-		bw := bufioWriterPool.Get().(*bufio.Writer)
-		defer func() {
-			bw.Reset(nil)
-			bufioWriterPool.Put(bw)
-		}()
-
-		bw.Reset(&ctxCountWriter{f, &e.written, ctx})
-		_, err = bw.ReadFrom(lr)
-		if err != nil {
-			return err
-		}
-
-		err = bw.Flush()
+		// Гарантируем использование 1МБ буфера при распаковке
+		bufInterface := sparseBufPool.Get()
+		buf := bufInterface.([]byte)
+		_, err = io.CopyBuffer(&ctxCountWriter{f, &e.written, ctx}, lr, buf)
+		sparseBufPool.Put(bufInterface)
 	}
 
 	// If we read everything allowed by the limit, but data still remains in the source reader - it's a bomb
