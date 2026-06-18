@@ -11,6 +11,7 @@ import (
 	"hash"
 	"io"
 	"os"
+	"sync"
 
 	"golang.org/x/crypto/pbkdf2"
 )
@@ -99,6 +100,7 @@ func (h *XCryptHeader) DeriveKey(password string) []byte {
 }
 
 type xCryptWriter struct {
+	mu     sync.Mutex
 	w      io.Writer
 	stream cipher.Stream
 	mac    hash.Hash
@@ -121,6 +123,8 @@ func newXCryptWriter(w io.Writer, key, iv []byte) (*xCryptWriter, error) {
 }
 
 func (cw *xCryptWriter) Write(p []byte) (int, error) {
+	cw.mu.Lock()
+	defer cw.mu.Unlock()
 	// Переиспользуем буфер, чтобы избежать аллокации (например, 2 МБ) на каждую запись
 	if cap(cw.buf) < len(p) {
 		cw.buf = make([]byte, len(p))
