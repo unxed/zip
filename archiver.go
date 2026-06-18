@@ -50,6 +50,15 @@ type archiverOptions struct {
 	recoveryPct             int
 	recoveryFile            *os.File
 	level                   int
+	pathMapping             map[string]string
+}
+
+// WithArchiverPathMapping sets the path mapping for logical names in the archive.
+func WithArchiverPathMapping(m map[string]string) ArchiverOption {
+	return func(o *archiverOptions) error {
+		o.pathMapping = m
+		return nil
+	}
 }
 
 // WithArchiverLevel sets the compression level (1-9 for Deflate, 1-4 for ZSTD).
@@ -457,15 +466,21 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 			return err
 		}
 
-		rel, err := filepath.Rel(a.chroot, path)
-		if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
-			rel = filepath.ToSlash(path)
-			vol := filepath.VolumeName(path)
-			if vol != "" {
-				rel = strings.TrimPrefix(rel, filepath.ToSlash(vol))
+		var rel string
+		var err error
+		if a.options.pathMapping != nil && a.options.pathMapping[path] != "" {
+			rel = a.options.pathMapping[path]
+		} else {
+			rel, err = filepath.Rel(a.chroot, path)
+			if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+				rel = filepath.ToSlash(path)
+				vol := filepath.VolumeName(path)
+				if vol != "" {
+					rel = strings.TrimPrefix(rel, filepath.ToSlash(vol))
+				}
+				rel = strings.TrimPrefix(rel, "/")
+				err = nil
 			}
-			rel = strings.TrimPrefix(rel, "/")
-			err = nil
 		}
 
 		hdr := &hdrs[i]
