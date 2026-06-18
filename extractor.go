@@ -1,21 +1,22 @@
 package zip
 
 import (
-    "errors"
 	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
-    "io/fs"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -299,6 +300,11 @@ func newExtractor(r *Reader, c io.Closer, chroot string, opts []ExtractorOption)
 	e.options.maxDecompressionRatio = 200      // 200:1 default
 	e.options.xattrs = true
 	e.options.chownErrorHandler = func(name string, err error) error {
+		if pe, ok := err.(*os.PathError); ok {
+			if errno, ok := pe.Err.(syscall.Errno); ok && errno == syscall.EPERM {
+				return nil
+			}
+		}
 		fmt.Fprintf(os.Stderr, "zip: %s: %v (continuing)\n", name, err)
 		return nil
 	}
