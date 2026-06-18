@@ -11,7 +11,8 @@ import (
 
 var ErrPoolSizeLessThanZero = errors.New("pool size must be greater than zero")
 
-const defaultBufferSize = 2 * 1024 * 1024
+// Увеличиваем внутренний буфер памяти до 4 МБ, чтобы реже создавать временные файлы на диске
+const defaultBufferSize = 4 * 1024 * 1024
 
 type filePoolCloseError []error
 

@@ -21,9 +21,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// Увеличиваем буфер до 512 КБ. Это значительно ускоряет запись на NTFS
 var bufioWriterPool = sync.Pool{
 	New: func() interface{} {
-		return bufio.NewWriterSize(nil, 32*1024)
+		return bufio.NewWriterSize(nil, 512*1024)
 	},
 }
 
