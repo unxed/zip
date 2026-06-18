@@ -600,7 +600,7 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 			}
 			activeFiles[".zip_dumpdir"] = true
 
-			filepath.Walk(e.chroot, func(path string, info os.FileInfo, err error) error {
+			filepath.WalkDir(e.chroot, func(path string, d fs.DirEntry, err error) error {
 				if err != nil {
 					return err
 				}
@@ -612,7 +612,7 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 					return err
 				}
 				relClean := filepath.ToSlash(rel)
-				if info.IsDir() {
+				if d.IsDir() {
 					relClean += "/"
 				}
 				if !activeFiles[relClean] {
