@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -75,9 +76,6 @@ func TestArchiver_TorrentZip(t *testing.T) {
 			t.Errorf("timestamps not overridden for %s", f.Name)
 		}
 		expectedFlags := uint16(2)
-		if strings.HasSuffix(f.Name, "/") {
-			expectedFlags = 0
-		}
 		if f.Flags != expectedFlags {
 			t.Errorf("flags not overridden for %s: got %d, want %d", f.Name, f.Flags, expectedFlags)
 		}
@@ -124,14 +122,14 @@ func TestArchiver_TorrentZip(t *testing.T) {
 	// Убеждаемся, что пустые папки сжаты ровно в 2 байта (пустой deflate поток)
 	for _, file := range zr.File {
 		if strings.HasSuffix(file.Name, "/") {
-			if file.Method != 0 {
-				t.Errorf("directory %s should be stored using Store (0), got %d", file.Name, file.Method)
+			if file.Method != 8 {
+				t.Errorf("directory %s should be stored using Deflate (8), got %d", file.Name, file.Method)
 			}
 			if file.UncompressedSize64 != 0 {
 				t.Errorf("directory %s must have uncompressed size 0, got %d", file.Name, file.UncompressedSize64)
 			}
-			if file.CompressedSize64 != 0 {
-				t.Errorf("directory %s must have compressed size 0, got %d", file.Name, file.CompressedSize64)
+			if file.CompressedSize64 != 2 {
+				t.Errorf("directory %s must have compressed size 2, got %d", file.Name, file.CompressedSize64)
 			}
 			if file.CRC32 != 0 {
 				t.Errorf("directory %s CRC should be 00000000, got %08X", file.Name, file.CRC32)
@@ -152,20 +150,52 @@ func TestWithArchiverTorrentZip_SetsLevel9(t *testing.T) {
 }
 
 func TestTorrentZip_BitExactWithReference(t *testing.T) {
+	tmp := t.TempDir()
+
 	// 1. Проверяем наличие "trrntzip" или "torrentzip" в PATH
 	trrntzipPath, err := exec.LookPath("trrntzip")
 	if err != nil {
 		trrntzipPath, err = exec.LookPath("torrentzip")
 	}
 
+	var buildErr error
+	var buildOut []byte
+
 	if trrntzipPath == "" {
-		t.Skip("Reference torrentzip binary not found in PATH. Skipping bit-exact integration test.")
+		// Пытаемся собрать эталонный torrentzip из папки ../torrentzip
+		cwd, err := os.Getwd()
+		if err == nil {
+			tzDir := filepath.Join(cwd, "..", "torrentzip")
+			tzBin := filepath.Join(tmp, "torrentzip_ref")
+			if runtime.GOOS == "windows" {
+				tzBin += ".exe"
+			}
+			buildCmd := exec.Command("go", "build", "-o", tzBin, "./cmd/torrentzip")
+			buildCmd.Dir = tzDir
+			buildOut, buildErr = buildCmd.CombinedOutput()
+			if buildErr == nil {
+				trrntzipPath = tzBin
+			}
+		}
+	}
+
+	if trrntzipPath == "" {
+		t.Logf("WARNING: Reference torrentzip binary not found in PATH and failed to build. Skipping bit-exact integration test.\nBuild Error: %v\nBuild Output:\n%s", buildErr, string(buildOut))
+		t.Skip("Reference torrentzip binary not found")
 	}
 
 	// 2. Подготовка файлов для архивации
-	tmp := t.TempDir()
 	srcDir := filepath.Join(tmp, "src")
 	os.MkdirAll(filepath.Join(srcDir, "dir1"), 0755)
+
+	// Создаем большой файл (655360 байт, типичный TRD образ),
+	// который будет сжиматься по-разному в Go flate и C zlib
+	var buf bytes.Buffer
+	for buf.Len() < 655360 {
+		buf.WriteString(fmt.Sprintf("This is some highly structured and repeating data that will test the LZ77 match finder differences between standard Go flate and C zlib. Line number: %d\n", buf.Len()))
+	}
+
+	os.WriteFile(filepath.Join(srcDir, "Aaargh!.trd"), buf.Bytes()[:655360], 0644)
 	os.WriteFile(filepath.Join(srcDir, "dir1", "file.txt"), []byte("highly structured and repeatable test data"), 0644)
 	os.WriteFile(filepath.Join(srcDir, "a.txt"), []byte("some other file content"), 0644)
 	os.MkdirAll(filepath.Join(srcDir, "empty_dir"), 0755)                     // Пустая директория
@@ -218,8 +248,25 @@ func TestTorrentZip_BitExactWithReference(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Запуск эталонного torrentzip для конвертации на месте (in-place)
-	cmd := exec.Command(trrntzipPath, refZipPath)
+	// Запуск эталонного torrentzip для конвертации
+	var cmd *exec.Cmd
+	isGoTool := false
+	if trrntzipPath != "" {
+		out, _ := exec.Command(trrntzipPath).CombinedOutput()
+		if bytes.Contains(out, []byte("Uwe Hoffmann")) {
+			isGoTool = true
+		}
+	}
+
+	if isGoTool {
+		// Go-версия требует явного указания -out и файлов
+		cmd = exec.Command(trrntzipPath, "-out", refZipPath, ".")
+		cmd.Dir = srcDir
+	} else {
+		// C-версия (trrntzip) работает in-place над готовым архивом
+		cmd = exec.Command(trrntzipPath, refZipPath)
+	}
+
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("Reference tool failed: %v, output: %s", err, string(out))
 	}

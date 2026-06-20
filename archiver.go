@@ -14,8 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	stdflate "compress/flate"
-
+	zlib4go "github.com/unxed/zlib4go"
 	"github.com/klauspost/compress/flate"
 	"github.com/klauspost/compress/zstd"
 	"github.com/unxed/zip/internal/filepool"
@@ -256,7 +255,12 @@ func NewArchiver(w io.Writer, chroot string, opts ...ArchiverOption) (*Archiver,
 		if a.options.method == Deflate {
 			a.zw.RegisterCompressor(Deflate, func(w io.Writer) (io.WriteCloser, error) {
 				if a.options.torrentZip {
-					return stdflate.NewWriter(w, 9)
+					szw := &tzStripZlibWriter{w: w}
+					zw, err := zlib4go.NewWriterLevel(szw, 9)
+					if err != nil {
+						return nil, err
+					}
+					return &tzZlib4goCloser{zw: zw, szw: szw}, nil
 				}
 				return flate.NewWriter(w, a.options.level)
 			})
@@ -820,4 +824,63 @@ func incOnSuccess(inc *int64, err error) {
 	if err == nil {
 		atomic.AddInt64(inc, 1)
 	}
+}
+type tzStripZlibWriter struct {
+	w       io.Writer
+	skipped int
+	tail    []byte
+}
+
+func (s *tzStripZlibWriter) Write(p []byte) (int, error) {
+	origLen := len(p)
+
+	// Пропускаем первые 2 байта (zlib header)
+	if s.skipped < 2 {
+		skip := 2 - s.skipped
+		if len(p) < skip {
+			s.skipped += len(p)
+			return origLen, nil
+		}
+		p = p[skip:]
+		s.skipped = 2
+	}
+
+	if len(p) == 0 {
+		return origLen, nil
+	}
+
+	// Добавляем новые данные к нашему "хвосту"
+	data := append(s.tail, p...)
+
+	// Если у нас 4 байта или меньше, мы не можем ничего записать,
+	// так как эти 4 байта потенциально являются чексуммой Adler-32,
+	// которая должна быть отброшена в конце.
+	if len(data) <= 4 {
+		s.tail = data
+		return origLen, nil
+	}
+
+	// Записываем всё, кроме последних 4 байт
+	toWrite := len(data) - 4
+	_, err := s.w.Write(data[:toWrite])
+
+	// Сохраняем новые последние 4 байта как хвост
+	s.tail = append([]byte(nil), data[toWrite:]...)
+
+	return origLen, err
+}
+
+type tzZlib4goCloser struct {
+	zw  io.WriteCloser
+	szw *tzStripZlibWriter
+}
+
+func (c *tzZlib4goCloser) Write(p []byte) (int, error) {
+	return c.zw.Write(p)
+}
+
+func (c *tzZlib4goCloser) Close() error {
+	// При закрытии оригинальный zlib допишет остатки и 4 байта Adler-32.
+	// Фильтр оставит эти 4 байта в c.szw.tail. Мы их просто игнорируем!
+	return c.zw.Close()
 }

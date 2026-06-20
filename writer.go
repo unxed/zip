@@ -459,14 +459,32 @@ func (w *Writer) CreateHeader(fh *FileHeader) (io.Writer, error) {
 	}
 
 	if strings.HasSuffix(fh.Name, "/") {
-		fh.Method = Store
-		fh.Flags &^= 0x8
-		fh.CompressedSize = 0
-		fh.CompressedSize64 = 0
-		fh.UncompressedSize = 0
-		fh.UncompressedSize64 = 0
+		if w.torrentZip {
+			fh.Method = Deflate
+			fh.Flags = 2
+			fh.CompressedSize = 2
+			fh.CompressedSize64 = 2
+			fh.UncompressedSize = 0
+			fh.UncompressedSize64 = 0
+			fh.CRC32 = 0
 
-		ow = dirWriter{}
+			if err := writeHeader(w.cw, h); err != nil {
+				return nil, err
+			}
+			if _, err := w.cw.Write([]byte{0x03, 0x00}); err != nil {
+				return nil, err
+			}
+			ow = dirWriter{}
+		} else {
+			fh.Method = Store
+			fh.Flags &^= 0x8
+			fh.CompressedSize = 0
+			fh.CompressedSize64 = 0
+			fh.UncompressedSize = 0
+			fh.UncompressedSize64 = 0
+
+			ow = dirWriter{}
+		}
 	} else {
 		if w.forceNoDescriptor {
 			fh.Flags &^= 0x8
@@ -630,8 +648,13 @@ func (w *Writer) CreateRaw(fh *FileHeader) (io.Writer, error) {
 		fh.CreatorVersion = 0
 		fh.ReaderVersion = 20
 		if strings.HasSuffix(fh.Name, "/") {
-			fh.Method = Store
-			fh.Flags = 0
+			fh.Method = Deflate
+			fh.Flags = 2
+			fh.CompressedSize = 2
+			fh.CompressedSize64 = 2
+			fh.UncompressedSize = 0
+			fh.UncompressedSize64 = 0
+			fh.CRC32 = 0
 		} else {
 			fh.Method = Deflate
 			fh.Flags = 2
@@ -650,6 +673,17 @@ func (w *Writer) CreateRaw(fh *FileHeader) (io.Writer, error) {
 	}
 
 	if strings.HasSuffix(fh.Name, "/") {
+		if w.torrentZip {
+			// В CreateRaw мы уже записали заголовок через writeHeader выше.
+			// Для TorrentZip пустая директория должна содержать 2 байта (пустой deflate блок).
+			// Обновляем структуру заголовка на правильные размеры.
+			// Но так как заголовок уже записан, мы должны были обновить его ДО writeHeader.
+			// К счастью, CreateRaw принимает структуру fh, которую пользователь заполняет сам.
+			// Однако, если это torrentZip, мы переопределяем свойства.
+			if _, err := w.cw.Write([]byte{0x03, 0x00}); err != nil {
+				return nil, err
+			}
+		}
 		w.last = nil
 		return dirWriter{}, nil
 	}
