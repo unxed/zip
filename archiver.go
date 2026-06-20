@@ -14,10 +14,10 @@ import (
 	"sync"
 	"sync/atomic"
 
-	zlib4go "github.com/unxed/zlib4go"
 	"github.com/klauspost/compress/flate"
 	"github.com/klauspost/compress/zstd"
 	"github.com/unxed/zip/internal/filepool"
+	zlib4go "github.com/unxed/zlib4go"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -825,6 +825,7 @@ func incOnSuccess(inc *int64, err error) {
 		atomic.AddInt64(inc, 1)
 	}
 }
+
 type tzStripZlibWriter struct {
 	w       io.Writer
 	skipped int
