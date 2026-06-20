@@ -317,3 +317,34 @@ func TestTorrentZip_BitExactWithReference(t *testing.T) {
 		t.Log("SUCCESS: Our TorrentZip output is 100% bit-exact identical to the reference tool!")
 	}
 }
+
+func TestTorrentZip_SlashNormalization(t *testing.T) {
+	buf := new(bytes.Buffer)
+	zw := NewWriter(buf)
+	zw.SetTorrentZip(true)
+
+	// Имя с Windows-стилем разделителя
+	const badName = "dir1\\file.txt"
+	fh := &FileHeader{
+		Name:   badName,
+		Method: Deflate,
+	}
+
+	w, err := zw.CreateHeader(fh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Write([]byte("data"))
+	zw.Close()
+
+	// Проверяем результат
+	zr, err := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedName := "dir1/file.txt"
+	if zr.File[0].Name != expectedName {
+		t.Errorf("expected slash normalization, got %q", zr.File[0].Name)
+	}
+}
