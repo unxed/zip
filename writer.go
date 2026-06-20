@@ -641,6 +641,7 @@ func (w *Writer) CreateRaw(fh *FileHeader) (io.Writer, error) {
 	fh.UncompressedSize = uint32(min(fh.UncompressedSize64, uint32max))
 
 	if w.torrentZip {
+		fh.Name = filepath.ToSlash(fh.Name)
 		fh.ModifiedTime = 48128
 		fh.ModifiedDate = 8600
 		fh.Extra = nil
