@@ -1,21 +1,21 @@
 package zip
 
 import (
-    "os"
-    "fmt"
-    "path"
-    "path/filepath"
 	"bufio"
-	"encoding/binary"
 	"bytes"
+	"encoding/binary"
 	"errors"
+	"fmt"
+	"github.com/unxed/par2"
 	"hash"
 	"hash/crc32"
 	"io"
 	"io/fs"
+	"os"
+	"path"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
-    "github.com/unxed/par2"
 )
 
 var (
@@ -32,12 +32,12 @@ type Writer struct {
 	comment     string
 
 	testHookCloseSizeOffset func(size, offset uint64)
-	encryptCD   bool
-	password    string
-	forceNoDescriptor bool
-	torrentZip        bool
-	recoveryPct       int
-	recoveryFile      *os.File
+	encryptCD               bool
+	password                string
+	forceNoDescriptor       bool
+	torrentZip              bool
+	recoveryPct             int
+	recoveryFile            *os.File
 }
 
 // SetTorrentZip enables torrentzip compatibility mode.
@@ -81,6 +81,7 @@ func (w *Writer) SetComment(comment string) error {
 	w.comment = comment
 	return nil
 }
+
 type flusher interface {
 	Flush() error
 }
@@ -154,6 +155,7 @@ func (c *chunkSeekWriter) Write(p []byte) (n int, err error) {
 	}
 	return n, nil
 }
+
 // SetEncryptCentralDirectory enables encryption of the central directory records.
 // This hides file names and metadata from unauthorized users.
 // Requires a password to be set.
@@ -173,9 +175,9 @@ func (w *Writer) Close() error {
 		return errors.New("zip: writer closed twice")
 	}
 	w.closed = true
-	
+
 	start := w.cw.count
-	
+
 	var cdWriter io.Writer = w.cw
 	var cdBuf *bytes.Buffer
 	var aesW io.WriteCloser
@@ -330,8 +332,8 @@ func (w *Writer) Close() error {
 
 		if w.encryptCD {
 			// SES Version 2 fields
-			b.uint16(Store)  // Compression: None
-			b.uint64(size)   // Compressed size (includes Salt + HMAC)
+			b.uint16(Store)           // Compression: None
+			b.uint64(size)            // Compressed size (includes Salt + HMAC)
 			b.uint64(unencryptedSize) // Original size (CD headers only)
 			b.uint16(sesAES256)
 			b.uint16(256)

@@ -44,7 +44,6 @@ func appendUnix000dExtra(extra []byte, hdr *FileHeader) []byte {
 	return append(extra, buf...)
 }
 
-
 func appendXattrs(extra []byte, xattrs map[string]string) []byte {
 	if len(xattrs) == 0 {
 		return extra
@@ -79,18 +78,26 @@ func parseUnixExtra(extra []byte) (uid, gid int, ok bool) {
 			if version == 1 {
 				offset := 1
 				// uid
-				if offset >= int(size) { break }
+				if offset >= int(size) {
+					break
+				}
 				uidSize := int(extra[offset])
 				offset++
-				if offset+uidSize > int(size) { break }
+				if offset+uidSize > int(size) {
+					break
+				}
 				uid = readInt(extra[offset : offset+uidSize])
 				offset += uidSize
 
 				// gid
-				if offset >= int(size) { break }
+				if offset >= int(size) {
+					break
+				}
 				gidSize := int(extra[offset])
 				offset++
-				if offset+gidSize > int(size) { break }
+				if offset+gidSize > int(size) {
+					break
+				}
 				gid = readInt(extra[offset : offset+gidSize])
 				return uid, gid, true
 			}

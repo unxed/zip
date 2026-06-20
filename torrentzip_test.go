@@ -168,8 +168,8 @@ func TestTorrentZip_BitExactWithReference(t *testing.T) {
 	os.MkdirAll(filepath.Join(srcDir, "dir1"), 0755)
 	os.WriteFile(filepath.Join(srcDir, "dir1", "file.txt"), []byte("highly structured and repeatable test data"), 0644)
 	os.WriteFile(filepath.Join(srcDir, "a.txt"), []byte("some other file content"), 0644)
-	os.MkdirAll(filepath.Join(srcDir, "empty_dir"), 0755) // Пустая директория
-	os.WriteFile(filepath.Join(srcDir, "empty_file.txt"), []byte{}, 0644) // Пустой регулярный файл
+	os.MkdirAll(filepath.Join(srcDir, "empty_dir"), 0755)                     // Пустая директория
+	os.WriteFile(filepath.Join(srcDir, "empty_file.txt"), []byte{}, 0644)     // Пустой регулярный файл
 	os.WriteFile(filepath.Join(srcDir, "Z_file.txt"), []byte("data Z"), 0644) // Проверка регистронезависимой сортировки
 	os.WriteFile(filepath.Join(srcDir, "a_file.txt"), []byte("data a"), 0644)
 

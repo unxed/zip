@@ -1,16 +1,16 @@
 package zip
 
 import (
-	"context"
-	"time"
-	"fmt"
-	"errors"
-	"os"
 	"bytes"
-	"strings"
+	"context"
+	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestArchiverAndExtractor(t *testing.T) {
@@ -384,12 +384,13 @@ type mockFileInfo struct {
 	name string
 	mode os.FileMode
 }
-func (m mockFileInfo) Name() string { return m.name }
-func (m mockFileInfo) Size() int64 { return 0 }
-func (m mockFileInfo) Mode() os.FileMode { return m.mode }
+
+func (m mockFileInfo) Name() string       { return m.name }
+func (m mockFileInfo) Size() int64        { return 0 }
+func (m mockFileInfo) Mode() os.FileMode  { return m.mode }
 func (m mockFileInfo) ModTime() time.Time { return time.Now() }
-func (m mockFileInfo) IsDir() bool { return m.mode.IsDir() }
-func (m mockFileInfo) Sys() interface{} { return nil }
+func (m mockFileInfo) IsDir() bool        { return m.mode.IsDir() }
+func (m mockFileInfo) Sys() interface{}   { return nil }
 
 func TestArchiver_SolidSeekIndex(t *testing.T) {
 	tmpDir := t.TempDir()

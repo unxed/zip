@@ -256,7 +256,7 @@ func TestLZMA_MemoryLimit(t *testing.T) {
 	header := []byte{
 		0x09, 0x00, // Version
 		0x05, 0x00, // propSize
-		0x5d,       // props[0]
+		0x5d,                   // props[0]
 		0x00, 0x00, 0x00, 0x10, // dictSize 256MB
 	}
 	r := bytes.NewReader(header)

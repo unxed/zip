@@ -353,21 +353,21 @@ func TestReader_NTFSTimestamps(t *testing.T) {
 	buf := new(bytes.Buffer)
 	binary.Write(buf, binary.LittleEndian, uint16(ntfsExtraID))
 	binary.Write(buf, binary.LittleEndian, uint16(32))
-	binary.Write(buf, binary.LittleEndian, uint32(0)) // Reserved
-	binary.Write(buf, binary.LittleEndian, uint16(1)) // AttrTag
+	binary.Write(buf, binary.LittleEndian, uint32(0))  // Reserved
+	binary.Write(buf, binary.LittleEndian, uint16(1))  // AttrTag
 	binary.Write(buf, binary.LittleEndian, uint16(24)) // AttrSize
 
 	// Ticks since 1601. 100ns precision.
 	// Use a prime number for testing: 132539520000000000 (around year 2021)
 	mtimeTick := uint64(132539520000000000)
-	binary.Write(buf, binary.LittleEndian, mtimeTick) // Mtime
-	binary.Write(buf, binary.LittleEndian, mtimeTick + 100) // Atime
-	binary.Write(buf, binary.LittleEndian, mtimeTick + 200) // Ctime
+	binary.Write(buf, binary.LittleEndian, mtimeTick)     // Mtime
+	binary.Write(buf, binary.LittleEndian, mtimeTick+100) // Atime
+	binary.Write(buf, binary.LittleEndian, mtimeTick+200) // Ctime
 
 	f := &File{FileHeader: FileHeader{Extra: buf.Bytes()}}
 
 	// Simulate parser call
-	_ = readDirectoryHeader(f, bytes.NewReader(make([]byte, 46 + 100))) // dummy read
+	_ = readDirectoryHeader(f, bytes.NewReader(make([]byte, 46+100))) // dummy read
 
 	// Verify that Accessed and Created are populated (parsing happens in parseExtras)
 	// For the test, call a piece of logic directly or verify through integration.
@@ -526,8 +526,12 @@ func TestSalvageMode_Zip(t *testing.T) {
 
 	found1, found2 := false, false
 	for _, file := range zr.File {
-		if file.Name == "file1.txt" { found1 = true }
-		if file.Name == "file2.txt" { found2 = true }
+		if file.Name == "file1.txt" {
+			found1 = true
+		}
+		if file.Name == "file2.txt" {
+			found2 = true
+		}
 	}
 
 	if !found1 || !found2 {

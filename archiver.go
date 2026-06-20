@@ -1,10 +1,10 @@
 package zip
 
 import (
-	"hash/crc32"
-	"errors"
 	"bufio"
 	"context"
+	"errors"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,9 +16,9 @@ import (
 
 	stdflate "compress/flate"
 
-	"github.com/unxed/zip/internal/filepool"
 	"github.com/klauspost/compress/flate"
 	"github.com/klauspost/compress/zstd"
+	"github.com/unxed/zip/internal/filepool"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -31,6 +31,7 @@ var copyBufPool = sync.Pool{
 		return make([]byte, 128*1024)
 	},
 }
+
 // Увеличиваем буфер чтения до 1 МБ для более быстрого I/O с диска
 var bufioReaderPool = sync.Pool{
 	New: func() interface{} {
@@ -129,6 +130,7 @@ func WithArchiverOffset(n int64) ArchiverOption {
 		return nil
 	}
 }
+
 // WithArchiverPlatformMetadata enables inclusion of local OS metadata (UID/GID)
 // for this archiver instance.
 func WithArchiverPlatformMetadata(enable bool) ArchiverOption {
@@ -316,7 +318,7 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 					innerZw.Close()
 					return err
 				}
-                rel, err := filepath.Rel(a.chroot, path)
+				rel, err := filepath.Rel(a.chroot, path)
 				if err != nil {
 					innerZw.Close()
 					return err

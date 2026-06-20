@@ -10,12 +10,12 @@ import (
 	"io/fs"
 	"os"
 	"path"
-	"unicode/utf8"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/klauspost/compress/flate"
 	"github.com/unxed/zipcharset"
@@ -27,6 +27,7 @@ var (
 	ErrChecksum     = errors.New("zip: checksum error")
 	ErrInsecurePath = errors.New("zip: insecure file path")
 )
+
 // DisableInsecurePaths controls whether paths containing ".." or "\" are rejected.
 var DisableInsecurePaths bool
 
@@ -138,40 +139,40 @@ func (r *Reader) salvage(rdr io.ReaderAt, size int64) error {
 			f.ModifiedTime = b.uint16()
 			f.ModifiedDate = b.uint16()
 			f.CRC32 = b.uint32()
-                    f.CompressedSize = b.uint32()
-                    f.UncompressedSize = b.uint32()
-                    f.CompressedSize64 = uint64(f.CompressedSize)
-                    f.UncompressedSize64 = uint64(f.UncompressedSize)
-                    nlen := int(b.uint16())
-                    elen := int(b.uint16())
+			f.CompressedSize = b.uint32()
+			f.UncompressedSize = b.uint32()
+			f.CompressedSize64 = uint64(f.CompressedSize)
+			f.UncompressedSize64 = uint64(f.UncompressedSize)
+			nlen := int(b.uint16())
+			elen := int(b.uint16())
 
-                    data := make([]byte, nlen+elen)
-                    if _, err := rdr.ReadAt(data, off+fileHeaderLen); err == nil {
-                        f.Name = string(data[:nlen])
-                        f.Extra = data[nlen:]
+			data := make([]byte, nlen+elen)
+			if _, err := rdr.ReadAt(data, off+fileHeaderLen); err == nil {
+				f.Name = string(data[:nlen])
+				f.Extra = data[nlen:]
 
-                        if f.CompressedSize == uint32max || f.UncompressedSize == uint32max {
-                            for extra := readBuf(f.Extra); len(extra) >= 4; {
-                                tag := extra.uint16()
-                                size := int(extra.uint16())
-                                if len(extra) < size {
-                                    break
-                                }
-                                fieldBuf := extra.sub(size)
-                                if tag == zip64ExtraID {
-                                    if f.UncompressedSize == uint32max && len(fieldBuf) >= 8 {
-                                        f.UncompressedSize64 = fieldBuf.uint64()
-                                    }
-                                    if f.CompressedSize == uint32max && len(fieldBuf) >= 8 {
-                                        f.CompressedSize64 = fieldBuf.uint64()
-                                    }
-                                }
-                            }
-                        }
+				if f.CompressedSize == uint32max || f.UncompressedSize == uint32max {
+					for extra := readBuf(f.Extra); len(extra) >= 4; {
+						tag := extra.uint16()
+						size := int(extra.uint16())
+						if len(extra) < size {
+							break
+						}
+						fieldBuf := extra.sub(size)
+						if tag == zip64ExtraID {
+							if f.UncompressedSize == uint32max && len(fieldBuf) >= 8 {
+								f.UncompressedSize64 = fieldBuf.uint64()
+							}
+							if f.CompressedSize == uint32max && len(fieldBuf) >= 8 {
+								f.CompressedSize64 = fieldBuf.uint64()
+							}
+						}
+					}
+				}
 
-                        r.File = append(r.File, f)
+				r.File = append(r.File, f)
 
-                        skip := fileHeaderLen + int64(nlen) + int64(elen) + int64(f.CompressedSize64)
+				skip := fileHeaderLen + int64(nlen) + int64(elen) + int64(f.CompressedSize64)
 				if skip > 0 && off+skip < size {
 					off += skip
 					continue
@@ -218,8 +219,10 @@ func (r *Reader) init(rdr io.ReaderAt, size int64) error {
 			strength:     1,     // Default 128
 		}
 		switch end.bitLen {
-		case 192: info.strength = 2
-		case 256: info.strength = 3
+		case 192:
+			info.strength = 2
+		case 256:
+			info.strength = 3
 		}
 		// Skip the Archive Decryption Header (usually 12-24 bytes)
 		// In practice, SES is more complex, but we are laying the foundation for stream decryption.
@@ -308,7 +311,7 @@ func (f *File) Open() (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	size := int64(f.CompressedSize64)
 	encryptionOffset := int64(0)
 	var crypto *zipCrypto
@@ -734,6 +737,7 @@ func (cr *cipherReader) Read(p []byte) (int, error) {
 	}
 	return n, err
 }
+
 type dirReader struct {
 	err error
 }
@@ -1009,7 +1013,7 @@ parseExtras:
 			f.aesInfo = &winzipAesInfo{
 				version:      fieldBuf.uint16(),
 				strength:     fieldBuf.uint8(), // fieldBuf.uint8() will move the pointer
-				actualMethod: 0, // will be set below
+				actualMethod: 0,                // will be set below
 			}
 			// Skip Vendor ID "AE" (2 bytes)
 			fieldBuf.uint16()

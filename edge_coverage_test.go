@@ -1,10 +1,10 @@
 package zip
 
 import (
-    "errors"
-    "io/fs"
 	"bytes"
+	"errors"
 	"io"
+	"io/fs"
 	"testing"
 )
 
@@ -108,7 +108,8 @@ func TestMultivolume_Edge(t *testing.T) {
 type dummyFileInfo struct {
 	fs.FileInfo
 }
-func (d dummyFileInfo) Sys() any { return nil }
+
+func (d dummyFileInfo) Sys() any          { return nil }
 func (d dummyFileInfo) Mode() fs.FileMode { return 0 }
 
 func TestSysOther_Zip(t *testing.T) {
@@ -142,4 +143,3 @@ func TestReader_InsecurePath_Edge(t *testing.T) {
 		// но для покрытия кода этого вызова достаточно.
 	}
 }
-

@@ -432,95 +432,95 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 		err = func() error {
 			for i, file := range e.zr.File {
 				name := file.Name
-			if e.options.stripComponents > 0 {
-				stripped, ok := stripComponents(name, e.options.stripComponents)
-				if !ok {
-					continue // Skip file with fewer or equal components
-				}
-				name = stripped
-			}
-
-			path, err := e.absPath(name)
-			if err != nil {
-				return err
-			}
-
-			prefix := e.chroot
-			if !strings.HasSuffix(prefix, string(filepath.Separator)) {
-				prefix += string(filepath.Separator)
-			}
-			if !strings.HasPrefix(path, prefix) && path != e.chroot {
-				return fmt.Errorf("%s cannot be extracted outside of chroot (%s)", path, e.chroot)
-			}
-			
-			if err := e.linksToDirs(path); err != nil {
-				return err
-			}
-
-			// Synthesize and guarantee parent directories structures
-			if err := e.synthesizeParentDirs(path); err != nil {
-				return err
-			}
-
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-            
-            // Overwrite control policies
-			if file.Mode()&os.ModeDir == 0 && file.Mode()&os.ModeSymlink == 0 && file.Linkname == "" {
-				if e.options.unlinkFirst {
-					os.RemoveAll(path) // Safer than os.Remove for preventing TOCTOU directory overwrites
-				}
-				if e.options.keepOldFiles {
-					if _, err := os.Stat(path); err == nil {
-						continue // Skip extracting, file already exists
+				if e.options.stripComponents > 0 {
+					stripped, ok := stripComponents(name, e.options.stripComponents)
+					if !ok {
+						continue // Skip file with fewer or equal components
 					}
+					name = stripped
 				}
-				if e.options.keepNewerFiles {
-					if fi, err := os.Stat(path); err == nil {
-						if fi.ModTime().After(file.Modified) {
-							continue // Skip extracting, disk file is newer
+
+				path, err := e.absPath(name)
+				if err != nil {
+					return err
+				}
+
+				prefix := e.chroot
+				if !strings.HasSuffix(prefix, string(filepath.Separator)) {
+					prefix += string(filepath.Separator)
+				}
+				if !strings.HasPrefix(path, prefix) && path != e.chroot {
+					return fmt.Errorf("%s cannot be extracted outside of chroot (%s)", path, e.chroot)
+				}
+
+				if err := e.linksToDirs(path); err != nil {
+					return err
+				}
+
+				// Synthesize and guarantee parent directories structures
+				if err := e.synthesizeParentDirs(path); err != nil {
+					return err
+				}
+
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+
+				// Overwrite control policies
+				if file.Mode()&os.ModeDir == 0 && file.Mode()&os.ModeSymlink == 0 && file.Linkname == "" {
+					if e.options.unlinkFirst {
+						os.RemoveAll(path) // Safer than os.Remove for preventing TOCTOU directory overwrites
+					}
+					if e.options.keepOldFiles {
+						if _, err := os.Stat(path); err == nil {
+							continue // Skip extracting, file already exists
+						}
+					}
+					if e.options.keepNewerFiles {
+						if fi, err := os.Stat(path); err == nil {
+							if fi.ModTime().After(file.Modified) {
+								continue // Skip extracting, disk file is newer
+							}
 						}
 					}
 				}
-			}
 
-			switch {
-			case file.Mode()&os.ModeSymlink != 0 || file.Linkname != "" || strings.Contains(file.Name, ":"):
-				continue
+				switch {
+				case file.Mode()&os.ModeSymlink != 0 || file.Linkname != "" || strings.Contains(file.Name, ":"):
+					continue
 
-		case file.Mode().IsDir():
-			err = e.createDirectory(path, file)
+				case file.Mode().IsDir():
+					err = e.createDirectory(path, file)
 
-		case file.Mode()&irregularModes != 0:
-			limiter <- struct{}{}
-			gf := e.zr.File[i]
-			p := path
-			wg.Go(func() error {
-				defer func() { <-limiter }()
-				err := extractSpecialFile(p, &gf.FileHeader)
-				if err == nil {
-					err = e.updateFileMetadata(p, gf)
+				case file.Mode()&irregularModes != 0:
+					limiter <- struct{}{}
+					gf := e.zr.File[i]
+					p := path
+					wg.Go(func() error {
+						defer func() { <-limiter }()
+						err := extractSpecialFile(p, &gf.FileHeader)
+						if err == nil {
+							err = e.updateFileMetadata(p, gf)
+						}
+						return err
+					})
+
+				default:
+					limiter <- struct{}{}
+					gf, p := e.zr.File[i], path // Local copies
+					wg.Go(func() error {
+						defer func() { <-limiter }()
+						err := e.createFile(ctx, p, gf)
+						if err == nil {
+							err = e.updateFileMetadata(p, gf)
+						}
+						if err != nil && e.options.tolerant {
+							fmt.Printf("zip: skipping corrupted file %q: %v\n", gf.Name, err)
+							return nil // Suppress error to continue
+						}
+						return err
+					})
 				}
-				return err
-			})
-
-			default:
-				limiter <- struct{}{}
-				gf, p := e.zr.File[i], path // Local copies
-				wg.Go(func() error {
-					defer func() { <-limiter }()
-					err := e.createFile(ctx, p, gf)
-					if err == nil {
-						err = e.updateFileMetadata(p, gf)
-					}
-					if err != nil && e.options.tolerant {
-						fmt.Printf("zip: skipping corrupted file %q: %v\n", gf.Name, err)
-						return nil // Suppress error to continue
-					}
-					return err
-				})
-			}
 				if err != nil && !e.options.tolerant {
 					return err
 				}
@@ -1138,6 +1138,7 @@ func (e *Extractor) linksToDirs(targetPath string) error {
 	}
 	return nil
 }
+
 // synthesizeParentDirs guarantees that all parent folders for the target path
 // exist on disk, recovering missing or corrupted directory headers on the fly,
 // while safely resolving path conflicts.

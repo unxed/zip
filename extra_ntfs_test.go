@@ -1,8 +1,8 @@
 package zip
 
 import (
-    "context"
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"

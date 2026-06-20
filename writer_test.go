@@ -1,14 +1,14 @@
 package zip
 
 import (
-    "encoding/binary"
-	"fmt"
-	"time"
 	"bytes"
-	"testing"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"testing"
+	"time"
 )
 
 func TestWriter_ZIP64Forced(t *testing.T) {
@@ -116,7 +116,7 @@ func TestWriter_ZIP64LargeCount(t *testing.T) {
 	// Hack for the test: substitute the number of records before closing
 	// to trigger writing of ZIP64 headers
 	originalDir := w.dir
-	fakeDir := make([]*header, uint16max + 1)
+	fakeDir := make([]*header, uint16max+1)
 	for i := range fakeDir {
 		fakeDir[i] = &header{FileHeader: &FileHeader{Name: "f.txt"}}
 	}
@@ -143,7 +143,7 @@ func TestWriter_LongNameError(t *testing.T) {
 	w := NewWriter(buf)
 
 	// Create a name with a length greater than 65535 bytes
-	longName := make([]byte, uint16max + 1)
+	longName := make([]byte, uint16max+1)
 	for i := range longName {
 		longName[i] = 'a'
 	}
@@ -166,7 +166,7 @@ func TestWriter_SetOffsetPanic(t *testing.T) {
 
 func TestWriter_LongCommentError(t *testing.T) {
 	w := NewWriter(new(bytes.Buffer))
-	longComment := make([]byte, uint16max + 1)
+	longComment := make([]byte, uint16max+1)
 	err := w.SetComment(string(longComment))
 	if err == nil {
 		t.Error("expected error for long comment, got nil")
@@ -194,7 +194,7 @@ func TestWriter_AddFS(t *testing.T) {
 }
 
 func TestLZMA_Decompression(t *testing.T) {
-	// This test requires a valid LZMA stream. 
+	// This test requires a valid LZMA stream.
 	// We will simply verify the method registration.
 	dcomp := decompressor(LZMA)
 	if dcomp == nil {

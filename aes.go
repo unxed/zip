@@ -61,10 +61,14 @@ func newWinZipAesReader(r io.Reader, password string, info *winzipAesInfo, compr
 	}
 	var keyLen, saltLen int
 	switch info.strength {
-	case 1: keyLen, saltLen = 16, 8
-	case 2: keyLen, saltLen = 24, 12
-	case 3: keyLen, saltLen = 32, 16
-	default: return nil, 0, errors.New("zip: unknown AES strength")
+	case 1:
+		keyLen, saltLen = 16, 8
+	case 2:
+		keyLen, saltLen = 24, 12
+	case 3:
+		keyLen, saltLen = 32, 16
+	default:
+		return nil, 0, errors.New("zip: unknown AES strength")
 	}
 
 	salt := make([]byte, saltLen)
@@ -94,7 +98,9 @@ func newWinZipAesReader(r io.Reader, password string, info *winzipAesInfo, compr
 
 	// WinZip AES uses CTR mode with IV=1 (per 16-byte blocks)
 	iv := make([]byte, 16)
-	for i := range iv { iv[i] = 0 }
+	for i := range iv {
+		iv[i] = 0
+	}
 	iv[0] = 1
 
 	decrypter := cipher.NewCTR(block, iv)
@@ -113,6 +119,7 @@ func newWinZipAesReader(r io.Reader, password string, info *winzipAesInfo, compr
 		mac:       hmac.New(sha1.New, authKey),
 	}, info.actualMethod, nil
 }
+
 // addIVBigEndian adds a block offset to a 128-bit big-endian IV
 func addIVBigEndian(baseIV []byte, offset uint64) []byte {
 	iv := make([]byte, 16)
@@ -140,10 +147,14 @@ func newWinZipAesReaderAt(r io.ReaderAt, password string, info *winzipAesInfo, c
 	}
 	var keyLen, saltLen int
 	switch info.strength {
-	case 1: keyLen, saltLen = 16, 8
-	case 2: keyLen, saltLen = 24, 12
-	case 3: keyLen, saltLen = 32, 16
-	default: return nil, errors.New("zip: unknown AES strength")
+	case 1:
+		keyLen, saltLen = 16, 8
+	case 2:
+		keyLen, saltLen = 24, 12
+	case 3:
+		keyLen, saltLen = 32, 16
+	default:
+		return nil, errors.New("zip: unknown AES strength")
 	}
 
 	salt := make([]byte, saltLen)
@@ -169,7 +180,9 @@ func newWinZipAesReaderAt(r io.ReaderAt, password string, info *winzipAesInfo, c
 	}
 
 	iv := make([]byte, 16)
-	for i := range iv { iv[i] = 0 }
+	for i := range iv {
+		iv[i] = 0
+	}
 	iv[0] = 1
 
 	return &winZipAesReaderAt{

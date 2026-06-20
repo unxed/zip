@@ -113,6 +113,7 @@ func (dr *deflate64Reader) Close() error {
 func decodeDeflate64(r io.Reader) io.ReadCloser {
 	return newDeflate64Reader(r)
 }
+
 var (
 	staticLiteralTree  = initStaticLiteralTree()
 	staticDistanceTree = initStaticDistanceTree()
@@ -369,15 +370,15 @@ func (ow *outputWindow) copyTo(output []byte) int {
 
 // Huffman Tree Constants and structures
 const (
-	symbolBits                      = 9
-	symbolMask                      = (1 << symbolBits) - 1 // 0x1FF
-	maxCodeLengths                  = 288
-	tableBits                       = 9
-	tableBitsMask                   = (1 << tableBits) - 1
-	maxLiteralTreeElements          = 288
-	maxDistTreeElements             = 32
-	endOfBlockCode                  = 256
-	numberOfCodeLengthTreeElements  = 19
+	symbolBits                     = 9
+	symbolMask                     = (1 << symbolBits) - 1 // 0x1FF
+	maxCodeLengths                 = 288
+	tableBits                      = 9
+	tableBitsMask                  = (1 << tableBits) - 1
+	maxLiteralTreeElements         = 288
+	maxDistTreeElements            = 32
+	endOfBlockCode                 = 256
+	numberOfCodeLengthTreeElements = 19
 )
 
 func pack(symbol int16, codeLen byte) int16 {
@@ -628,28 +629,28 @@ const (
 )
 
 type inflaterManaged struct {
-	output                 *outputWindow
-	bits                   bitsBuffer
-	literalLengthTree      *huffmanTree
-	distanceTree           *huffmanTree
-	state                  inflaterState
-	bfinal                 bool
-	blockType              blockType
-	blockLengthBuffer      [4]byte
-	blockLength            int
-	length                 int
-	distanceCode           uint16
-	extraBits              int32
-	loopCounter            uint32
-	literalLengthCodeCount uint32
-	distanceCodeCount      uint32
-	codeLengthCodeCount    uint32
-	codeArraySize          uint32
-	lengthCode             uint16
-	codeList               [maxLiteralTreeElements + maxDistTreeElements]byte
+	output                   *outputWindow
+	bits                     bitsBuffer
+	literalLengthTree        *huffmanTree
+	distanceTree             *huffmanTree
+	state                    inflaterState
+	bfinal                   bool
+	blockType                blockType
+	blockLengthBuffer        [4]byte
+	blockLength              int
+	length                   int
+	distanceCode             uint16
+	extraBits                int32
+	loopCounter              uint32
+	literalLengthCodeCount   uint32
+	distanceCodeCount        uint32
+	codeLengthCodeCount      uint32
+	codeArraySize            uint32
+	lengthCode               uint16
+	codeList                 [maxLiteralTreeElements + maxDistTreeElements]byte
 	codeLengthTreeCodeLength [numberOfCodeLengthTreeElements]byte
-	deflate64              bool
-	codeLengthTree         *huffmanTree
+	deflate64                bool
+	codeLengthTree           *huffmanTree
 }
 
 func newInflaterManaged() *inflaterManaged {

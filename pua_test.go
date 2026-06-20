@@ -28,7 +28,6 @@ func TestPUA_Zip_EncodingPreservation(t *testing.T) {
 		t.Fatalf("Extraction failed: %v", err)
 	}
 
-
 	expectedPath := filepath.Join(dstDir, rawName)
 	if _, err := os.Stat(expectedPath); err != nil {
 		t.Errorf("PUA Filename not restored correctly to raw bytes: %v", err)

@@ -205,7 +205,7 @@ func (dw *deflate64Writer) flushBlock(bfinal bool) error {
 		} else {
 			clCodes = append(clCodes, val)
 			clFreqs[val]++
-			
+
 			// Code 16 repeats the PREVIOUS symbol. Number of repeats = run - 1
 			dupCount := run - 1
 			if dupCount >= 3 {

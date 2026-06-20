@@ -222,7 +222,7 @@ func TestUpdater_ReplaceLastFile(t *testing.T) {
 func TestUpdater_DuplicateHeaderError(t *testing.T) {
 	tmp := t.TempDir()
 	zipPath := filepath.Join(tmp, "dup.zip")
-	
+
 	f, _ := os.Create(zipPath)
 	zw := NewWriter(f)
 	zw.Create("file.txt")
@@ -355,7 +355,7 @@ func TestUpdater_WithPrefixStub(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open updater: %v", err)
 	}
-	
+
 	// If the ZIP was created with SetOffset, internal offsets already include the prefix size.
 	// In this case, the calculated baseOffset for the reader will be 0. Both variants (0 and 21) are valid.
 	if u.baseOffset != 0 && u.baseOffset != int64(len(stub)) {

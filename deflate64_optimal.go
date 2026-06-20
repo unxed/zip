@@ -53,7 +53,7 @@ func (op *optimalParser) resetPrices() {
 	}
 	// Positions are estimated using log2(dist)
 	for i := range op.posPrices {
-		op.posPrices[i] = uint32(12 + i) * 4
+		op.posPrices[i] = uint32(12+i) * 4
 	}
 }
 

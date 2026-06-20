@@ -17,8 +17,8 @@ func TestUnixExtraFields(t *testing.T) {
 
 func TestReadInt(t *testing.T) {
 	cases := []struct {
-		b     []byte
-		want  int
+		b    []byte
+		want int
 	}{
 		{[]byte{0x05}, 5},
 		{[]byte{0xFF}, 255},

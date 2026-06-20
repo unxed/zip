@@ -4,8 +4,8 @@
 package zip
 
 import (
-	"os"
 	"golang.org/x/sys/unix"
+	"os"
 )
 
 func preallocate(f *os.File, size int64) error {

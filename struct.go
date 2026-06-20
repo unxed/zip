@@ -1,10 +1,10 @@
 package zip
 
 import (
-    "os"
-    "hash/crc32"
-	"io/fs"
 	"encoding/binary"
+	"hash/crc32"
+	"io/fs"
+	"os"
 	"path"
 	"time"
 )
@@ -15,8 +15,8 @@ const (
 	Deflate   uint16 = 8 // DEFLATE compressed
 	Deflate64 uint16 = 9
 	BZIP2     uint16 = 12
-	LZMA    uint16 = 14
-	ZSTD    uint16 = 93 // Zstandard compressed
+	LZMA      uint16 = 14
+	ZSTD      uint16 = 93 // Zstandard compressed
 )
 
 const (
@@ -63,18 +63,18 @@ const (
 	unicodePathExtraID    = 0x7075 // Info-ZIP Unicode Path Extra Field
 	//                      0x756e // ASi UNIX
 	//                             // 0x756f..0x7810 unused
-	xattrExtraID          = 0x7811 // f4 extensions: Xattrs
+	xattrExtraID = 0x7811 // f4 extensions: Xattrs
 	//                      0x7812 // Reserved for further f4 extensions versions
 	//                      0x7813 // Reserved for further f4 extensions versions
 	//                      0x7814 // Reserved for further f4 extensions versions
 	//                      0x7815 // Reserved for further f4 extensions versions
 	//                      0x7816 // Reserved for further f4 extensions versions
-	unixOwnerNameExtraID  = 0x7817 // f4 extensions: Unix owner/group string names
-	xcryptExtraID         = 0x7819 // f4 extensions: XCrypt encryption extra field
+	unixOwnerNameExtraID = 0x7817 // f4 extensions: Unix owner/group string names
+	xcryptExtraID        = 0x7819 // f4 extensions: XCrypt encryption extra field
 	//                             // 0x781a..0x7854 unused
 	//                      0x7855 // Info-ZIP UNIX (new)
 	//                      0x7875 // Info-ZIP UNIX (newer UID/GID)
-	winzipAesExtraID      = 0x9901 // WinZip AES encryption extra field
+	winzipAesExtraID = 0x9901 // WinZip AES encryption extra field
 )
 
 // Abstraction hooks for NTFS security and stream operations to support unit testing on non-Windows platforms.
@@ -83,16 +83,18 @@ var (
 	applyNtfsAclFunc              = applyNtfsAcl
 	getAlternativeDataStreamsFunc = getAlternativeDataStreams
 )
+
 const (
 	// Strong Encryption (SES) Algorithm IDs
-	sesDES    = 0x6601
-	sesRC2old = 0x6602
+	sesDES     = 0x6601
+	sesRC2old  = 0x6602
 	ses3DES168 = 0x6603
 	ses3DES112 = 0x6609
 	sesAES128  = 0x660E
 	sesAES192  = 0x660F
 	sesAES256  = 0x6610
 )
+
 // ConfigIncludePlatformMetadata defines if FileInfoHeader should automatically
 // include OS-specific metadata (like UID/GID on Unix).
 // Enabled by default to match system archivers behavior.
@@ -140,9 +142,9 @@ type FileHeader struct {
 	Devminor int64
 	Linkname string
 	// Xattrs
-	Xattrs   map[string]string
+	Xattrs map[string]string
 	// NTFS Attributes
-	Acl      []byte // Windows Security Descriptor (ACL)
+	Acl []byte // Windows Security Descriptor (ACL)
 
 	// Seek Index (SOZip / GZIDX Hidden files)
 	SeekChunkSize  uint32    // Uncompressed block size (e.g. 1MB)
@@ -174,13 +176,13 @@ func (fi headerFileInfo) Size() int64 {
 	}
 	return int64(fi.fh.UncompressedSize)
 }
-func (fi headerFileInfo) IsDir() bool        { return fi.Mode().IsDir() }
-func (fi headerFileInfo) ModTime() time.Time { return fi.fh.Modified.UTC() }
-func (fi headerFileInfo) Mode() fs.FileMode  { return fi.fh.Mode() }
-func (fi headerFileInfo) Type() fs.FileMode  { return fi.fh.Mode().Type() }
-func (fi headerFileInfo) Sys() any           { return fi.fh }
+func (fi headerFileInfo) IsDir() bool                { return fi.Mode().IsDir() }
+func (fi headerFileInfo) ModTime() time.Time         { return fi.fh.Modified.UTC() }
+func (fi headerFileInfo) Mode() fs.FileMode          { return fi.fh.Mode() }
+func (fi headerFileInfo) Type() fs.FileMode          { return fi.fh.Mode().Type() }
+func (fi headerFileInfo) Sys() any                   { return fi.fh }
 func (fi headerFileInfo) Info() (fs.FileInfo, error) { return fi, nil }
-func (fi headerFileInfo) String() string { return fs.FormatFileInfo(fi) }
+func (fi headerFileInfo) String() string             { return fs.FormatFileInfo(fi) }
 
 func FileInfoHeader(fi fs.FileInfo) (*FileHeader, error) {
 	size := fi.Size()
@@ -211,11 +213,11 @@ type directoryEnd struct {
 	directoryOffset    uint64
 	commentLen         uint16
 	comment            string
-	
+
 	// SES (Strong Encryption) fields
-	encrypted          bool
-	algId              uint16
-	bitLen             uint16
+	encrypted bool
+	algId     uint16
+	bitLen    uint16
 }
 
 func timeZone(offset time.Duration) *time.Location {
@@ -300,17 +302,17 @@ func (fh *FileHeader) injectAutoExtras() uint16 {
 		return -1, 0
 	}
 
-    /*
-	removeTag := func(id uint16) {
-		off, size := findTag(id)
-		if off >= 0 {
-			newExtra := make([]byte, 0, len(fh.Extra)-size)
-			newExtra = append(newExtra, fh.Extra[:off]...)
-			newExtra = append(newExtra, fh.Extra[off+size:]...)
-			fh.Extra = newExtra
+	/*
+		removeTag := func(id uint16) {
+			off, size := findTag(id)
+			if off >= 0 {
+				newExtra := make([]byte, 0, len(fh.Extra)-size)
+				newExtra = append(newExtra, fh.Extra[:off]...)
+				newExtra = append(newExtra, fh.Extra[off+size:]...)
+				fh.Extra = newExtra
+			}
 		}
-	}
-    */
+	*/
 
 	hasTag := func(id uint16) bool {
 		off, _ := findTag(id)
@@ -319,18 +321,30 @@ func (fh *FileHeader) injectAutoExtras() uint16 {
 
 	if extTimeFlags > 0 && !hasTag(extTimeExtraID) {
 		var size uint16 = 1
-		if extTimeFlags&1 != 0 { size += 4 }
-		if extTimeFlags&2 != 0 { size += 4 }
-		if extTimeFlags&4 != 0 { size += 4 }
+		if extTimeFlags&1 != 0 {
+			size += 4
+		}
+		if extTimeFlags&2 != 0 {
+			size += 4
+		}
+		if extTimeFlags&4 != 0 {
+			size += 4
+		}
 
 		buf := make([]byte, 4+size)
 		eb := writeBuf(buf)
 		eb.uint16(extTimeExtraID)
 		eb.uint16(size)
 		eb.uint8(extTimeFlags)
-		if extTimeFlags&1 != 0 { eb.uint32(uint32(fh.Modified.Unix())) }
-		if extTimeFlags&2 != 0 { eb.uint32(uint32(fh.Accessed.Unix())) }
-		if extTimeFlags&4 != 0 { eb.uint32(uint32(fh.Created.Unix())) }
+		if extTimeFlags&1 != 0 {
+			eb.uint32(uint32(fh.Modified.Unix()))
+		}
+		if extTimeFlags&2 != 0 {
+			eb.uint32(uint32(fh.Accessed.Unix()))
+		}
+		if extTimeFlags&4 != 0 {
+			eb.uint32(uint32(fh.Created.Unix()))
+		}
 		fh.Extra = append(fh.Extra, buf...)
 	}
 

@@ -4,7 +4,7 @@
 package zip
 
 import (
-    "io"
+	"io"
 	"os"
 	"strings"
 	"syscall"

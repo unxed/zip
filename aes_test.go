@@ -1,10 +1,10 @@
 package zip
 
 import (
-    "crypto/hmac"
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/sha1"
 	"io"
 	"testing"
@@ -80,9 +80,9 @@ func TestWinZipAES_FullCycle(t *testing.T) {
 	// 1. Write the encrypted file
 	zw := NewWriter(buf)
 	fh := &FileHeader{
-		Name:     "secret.txt",
-		Method:   Deflate,
-		Password: password,
+		Name:        "secret.txt",
+		Method:      Deflate,
+		Password:    password,
 		AESStrength: 3, // AES-256
 	}
 	w, err := zw.CreateHeader(fh)

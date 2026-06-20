@@ -1,10 +1,10 @@
 package zip
 
 import (
-	"hash/crc32"
-    "fmt"
-    "bytes"
+	"bytes"
 	"context"
+	"fmt"
+	"hash/crc32"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -181,7 +181,7 @@ func TestExtractor_SymlinkSecurityDeep(t *testing.T) {
 
 	f, _ := os.Create(zipPath)
 	zw := NewWriter(f)
-	
+
 	// Create a symlink that points to a path OUTSIDE the archive
 	fh := &FileHeader{Name: "attack_link"}
 	fh.SetMode(os.ModeSymlink)
@@ -1085,4 +1085,3 @@ func TestExternalZip_Zip(t *testing.T) {
 		t.Errorf("Content mismatch in sub/file2.txt: expected 'nested external zip data', got %q", string(data2))
 	}
 }
-

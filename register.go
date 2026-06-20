@@ -1,18 +1,18 @@
 package zip
 
 import (
-    "fmt"
+	"bytes"
+	"compress/bzip2"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
-	"compress/bzip2"
-	"bytes"
-	"encoding/binary"
 
+	"github.com/dovydenkovas/ppmd"
 	"github.com/klauspost/compress/flate"
 	"github.com/klauspost/compress/zstd"
 	"github.com/ulikunitz/xz/lzma"
-	"github.com/dovydenkovas/ppmd"
 )
 
 type Compressor func(w io.Writer) (io.WriteCloser, error)
@@ -241,6 +241,7 @@ func init() {
 var MaxDecompressionDictSize int64 = 128 << 20
 
 type errorReader struct{ err error }
+
 func (e errorReader) Read(p []byte) (int, error) { return 0, e.err }
 func (e errorReader) Close() error               { return nil }
 func newPPMdReader(r io.Reader, size uint64) io.ReadCloser {
@@ -347,7 +348,7 @@ type lzmaWriter struct {
 }
 
 func (lw *lzmaWriter) Write(p []byte) (int, error) { return lw.w.Write(p) }
-func (lw *lzmaWriter) Close() error               { return lw.w.Close() }
+func (lw *lzmaWriter) Close() error                { return lw.w.Close() }
 
 type headerSwallower struct {
 	w     io.Writer
