@@ -213,6 +213,12 @@ This library extends the standard ZIP format by proposing **f4 zip extensions**.
 
 See the technical specification in [f4zip.md](./f4zip.md).
 
+## TorrentZip Specification
+
+Our implementation is 100% bit-exact compatible with the official C-based `trrntzip` converter. We have documented the exact technical requirements of the format for future reference.
+
+See the technical specification in [torrentzip.md](./torrentzip.md).
+
 ### Why "f4"?
 
 The name comes from the [f4 file manager](https://github.com/unxed/far2l), a cross-platform asynchronous clone of Far Manager. This library was built to provide f4 with high-fidelity archive support, ensuring that system-specific metadata like ACLs and Xattrs are preserved when moving data between Linux, Windows, and macOS.
