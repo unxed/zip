@@ -426,11 +426,17 @@ func (w *Writer) CreateHeader(fh *FileHeader) (io.Writer, error) {
 	if w.torrentZip {
 		fh.ModifiedTime = 48128
 		fh.ModifiedDate = 8600
-		fh.Flags = 2
 		fh.Extra = nil
 		fh.ExternalAttrs = 0
 		fh.CreatorVersion = 0
 		fh.ReaderVersion = 20
+		if strings.HasSuffix(fh.Name, "/") {
+			fh.Method = Store
+			fh.Flags = 0
+		} else {
+			fh.Method = Deflate
+			fh.Flags = 2
+		}
 	}
 
 	var originalMethod uint16
@@ -617,11 +623,17 @@ func (w *Writer) CreateRaw(fh *FileHeader) (io.Writer, error) {
 	if w.torrentZip {
 		fh.ModifiedTime = 48128
 		fh.ModifiedDate = 8600
-		fh.Flags = 2
 		fh.Extra = nil
 		fh.ExternalAttrs = 0
 		fh.CreatorVersion = 0
 		fh.ReaderVersion = 20
+		if strings.HasSuffix(fh.Name, "/") {
+			fh.Method = Store
+			fh.Flags = 0
+		} else {
+			fh.Method = Deflate
+			fh.Flags = 2
+		}
 	}
 
 	h := &header{

@@ -14,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	stdflate "compress/flate"
+
 	"github.com/unxed/zip/internal/filepool"
 	"github.com/klauspost/compress/flate"
 	"github.com/klauspost/compress/zstd"
@@ -251,6 +253,9 @@ func NewArchiver(w io.Writer, chroot string, opts ...ArchiverOption) (*Archiver,
 	if a.options.level != 0 {
 		if a.options.method == Deflate {
 			a.zw.RegisterCompressor(Deflate, func(w io.Writer) (io.WriteCloser, error) {
+				if a.options.torrentZip {
+					return stdflate.NewWriter(w, 9)
+				}
 				return flate.NewWriter(w, a.options.level)
 			})
 		} else if a.options.method == ZSTD {
@@ -558,7 +563,7 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 				hdr.Method = a.options.method
 			}
 
-			if fp == nil || fi.Size() < 32*1024 {
+			if fp == nil || (fi.Size() < 32*1024 && !a.options.torrentZip) {
 				err = a.createFile(ctx, path, fi, &hdr, nil)
 				incOnSuccess(&a.entries, err)
 			} else {
@@ -598,6 +603,8 @@ func (a *Archiver) fileInfoHeaderFast(name string, fi os.FileInfo, hdr *FileHead
 	hdr.SetMode(fi.Mode())
 	if hdr.Mode().IsDir() {
 		hdr.Name += "/"
+		hdr.UncompressedSize64 = 0
+		hdr.UncompressedSize = 0
 	}
 	if hdr.UncompressedSize64 > uint32max {
 		hdr.UncompressedSize = uint32max
@@ -675,10 +682,27 @@ func (a *Archiver) createFile(ctx context.Context, path string, fi os.FileInfo, 
 	return a.compressFile(ctx, f, fi, hdr, tmp)
 }
 
-func (a *Archiver) compressFile(ctx context.Context, f *os.File, fi os.FileInfo, hdr *FileHeader, tmp *filepool.File) error {
+func (a *Archiver) compressFile(ctx context.Context, r io.ReadSeeker, fi os.FileInfo, hdr *FileHeader, tmp *filepool.File) error {
+	if a.options.torrentZip && hdr.UncompressedSize64 == 0 {
+		a.m.Lock()
+		defer a.m.Unlock()
+
+		hdr.CompressedSize64 = 2
+		hdr.CRC32 = 0
+
+		w, err := a.createHeaderRaw(fi, hdr)
+		if err != nil {
+			return err
+		}
+
+		_, err = w.Write([]byte{0x03, 0x00})
+		atomic.AddInt64(&a.written, 2)
+		return err
+	}
+
 	comp := a.zw.compressor(hdr.Method)
 	if comp == nil || tmp == nil {
-		return a.compressFileSimple(ctx, f, fi, hdr)
+		return a.compressFileSimple(ctx, r, fi, hdr)
 	}
 
 	fw, err := comp(tmp)
@@ -691,7 +715,7 @@ func (a *Archiver) compressFile(ctx context.Context, f *os.File, fi os.FileInfo,
 		br.Reset(nil)
 		bufioReaderPool.Put(br)
 	}()
-	br.Reset(f)
+	br.Reset(r)
 
 	// Используем умеренный буфер (128КБ), чтобы не перегружать RAM при
 	// большом количестве параллельных потоков.
@@ -708,10 +732,10 @@ func (a *Archiver) compressFile(ctx context.Context, f *os.File, fi os.FileInfo,
 		hdr.Flags |= 0x8
 	}
 	hdr.CompressedSize64 = tmp.Written()
-	if hdr.CompressedSize64 > hdr.UncompressedSize64 {
-		f.Seek(0, io.SeekStart)
+	if hdr.CompressedSize64 > hdr.UncompressedSize64 && !a.options.torrentZip {
+		r.Seek(0, io.SeekStart)
 		hdr.Method = Store
-		return a.compressFileSimple(ctx, f, fi, hdr)
+		return a.compressFileSimple(ctx, r, fi, hdr)
 	}
 	hdr.CRC32 = tmp.Checksum()
 
@@ -728,13 +752,13 @@ func (a *Archiver) compressFile(ctx context.Context, f *os.File, fi os.FileInfo,
 	return err
 }
 
-func (a *Archiver) compressFileSimple(ctx context.Context, f *os.File, fi os.FileInfo, hdr *FileHeader) error {
+func (a *Archiver) compressFileSimple(ctx context.Context, r io.Reader, fi os.FileInfo, hdr *FileHeader) error {
 	br := bufioReaderPool.Get().(*bufio.Reader)
 	defer func() {
 		br.Reset(nil)
 		bufioReaderPool.Put(br)
 	}()
-	br.Reset(f)
+	br.Reset(r)
 
 	a.m.Lock()
 	defer a.m.Unlock()
