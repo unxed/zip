@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/klauspost/compress/flate"
 	"github.com/klauspost/compress/zstd"
@@ -359,11 +360,28 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 		innerA.options.method = Store
 		innerA.options.solid = false
 
+		progressDone := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(100 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-progressDone:
+					return
+				case <-ticker.C:
+					b, e := innerA.Written()
+					atomic.StoreInt64(&a.written, b)
+					atomic.StoreInt64(&a.entries, e)
+				}
+			}
+		}()
+
 		err = innerA.Archive(ctx, files)
+		close(progressDone)
 		innerZw.Close()
 
-		atomic.AddInt64(&a.entries, atomic.LoadInt64(&innerA.entries))
-		atomic.AddInt64(&a.written, atomic.LoadInt64(&innerA.written))
+		atomic.StoreInt64(&a.written, atomic.LoadInt64(&innerA.written))
+		atomic.StoreInt64(&a.entries, atomic.LoadInt64(&innerA.entries))
 
 		incOnSuccess(&a.entries, err)
 		return err
