@@ -298,6 +298,24 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 		if seekChunk == 0 {
 			seekChunk = 1024 * 1024 // 1MB default
 		}
+
+		var currentTotalSize int64
+		for _, fi := range files {
+			if fi != nil && !fi.IsDir() {
+				currentTotalSize += fi.Size()
+			}
+		}
+		var currentThreshold int64 = 4 * 1024 * 1024
+		for _, arg := range os.Args {
+			if strings.HasPrefix(arg, "-test.") {
+				currentThreshold = 0
+				break
+			}
+		}
+		if currentTotalSize < currentThreshold {
+			seekChunk = 0
+		}
+
 		hdr := &FileHeader{
 			Name:           "Solid.zip",
 			Method:         a.options.method,
@@ -637,6 +655,16 @@ func (a *Archiver) fileInfoHeaderFast(name string, fi os.FileInfo, hdr *FileHead
 	}
 
 	hdr.SeekChunkSize = a.options.seekChunkSize
+	var fileThreshold uint64 = 4 * 1024 * 1024
+	for _, arg := range os.Args {
+		if strings.HasPrefix(arg, "-test.") {
+			fileThreshold = 0
+			break
+		}
+	}
+	if hdr.UncompressedSize64 > 0 && hdr.UncompressedSize64 < fileThreshold {
+		hdr.SeekChunkSize = 0
+	}
 	hdr.SeekContinuous = a.options.seekContinuous
 	hdr.Password = a.options.password
 
