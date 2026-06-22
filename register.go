@@ -12,7 +12,7 @@ import (
 	"github.com/dovydenkovas/ppmd"
 	"github.com/klauspost/compress/flate"
 	"github.com/klauspost/compress/zstd"
-	"github.com/ulikunitz/xz/lzma"
+	"github.com/unxed/xz/lzma"
 )
 
 type Compressor func(w io.Writer) (io.WriteCloser, error)
@@ -296,7 +296,7 @@ func newLZMAReader(r io.Reader) io.ReadCloser {
 		return errorReader{fmt.Errorf("zip: LZMA dictionary limit exceeded (%d bytes)", dictSize)}
 	}
 
-	// The ulikunitz/xz/lzma library expects a classic .lzma header (13 bytes):
+	// The unxed/xz/lzma library expects a classic .lzma header (13 bytes):
 	// [1b props][4b dict size][8b uncompressed size]
 	fullHeader := make([]byte, 13)
 	copy(fullHeader[0:5], props)
