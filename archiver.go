@@ -484,6 +484,12 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 		sort.Strings(names)
 	}
 
+	// Кэшируем рабочую директорию, чтобы убрать системные вызовы из цикла
+	wd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+
 	var fp *filepool.FilePool
 	concurrency := a.options.concurrency
 	if len(files) < concurrency {
@@ -508,7 +514,23 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 		}
 	}()
 
-	limiter := make(chan struct{}, concurrency)
+	var taskCh chan func() error
+	if fp != nil && concurrency > 1 {
+		taskCh = make(chan func() error, concurrency*2)
+		for i := 0; i < concurrency; i++ {
+			wg.Go(func() error {
+				for task := range taskCh {
+					if ctx.Err() != nil {
+						continue
+					}
+					if err := task(); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
+		}
+	}
 
 	for _, name := range names {
 		fi := files[name]
@@ -516,14 +538,21 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 			continue
 		}
 
-		path, err := filepath.Abs(name)
-		if err != nil {
-			return err
+		// Быстрый путь без вызова Abs
+		var path string
+		if filepath.IsAbs(name) {
+			path = filepath.Clean(name)
+		} else {
+			path = filepath.Clean(filepath.Join(wd, name))
 		}
 
 		var rel string
 		if a.options.pathMapping != nil && a.options.pathMapping[path] != "" {
 			rel = a.options.pathMapping[path]
+		} else if strings.HasPrefix(path, a.chroot) {
+			// Высокоскоростной fast-path для путей внутри chroot
+			rel = path[len(a.chroot):]
+			rel = filepath.ToSlash(strings.TrimPrefix(rel, string(filepath.Separator)))
 		} else {
 			rel, err = filepath.Rel(a.chroot, path)
 			if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
@@ -533,7 +562,6 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 					rel = strings.TrimPrefix(rel, filepath.ToSlash(vol))
 				}
 				rel = strings.TrimPrefix(rel, "/")
-				err = nil
 			}
 		}
 
@@ -580,22 +608,37 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 			rememberHardLink(fi, rel, a.seenHardLinks)
 
 			if hdr.Mode()&irregularModes != 0 {
-				limiter <- struct{}{}
-				h, p, fInfo := hdr, path, fi
-				wg.Go(func() error {
-					defer func() { <-limiter }()
-					h.Method = Store
-					h.CompressedSize64 = 0
-					h.UncompressedSize64 = 0
-					h.CRC32 = 0
+				if taskCh == nil {
+					hdr.Method = Store
+					hdr.CompressedSize64 = 0
+					hdr.UncompressedSize64 = 0
+					hdr.CRC32 = 0
 					if a.options.xattrs {
-						sysXattrs(p, &h)
+						sysXattrs(path, &hdr)
 					}
-					h.Extra = appendUnix000dExtra(h.Extra, &h)
-					err := a.createSpecialFile(fInfo, &h)
+					hdr.Extra = appendUnix000dExtra(hdr.Extra, &hdr)
+					err = a.createSpecialFile(fi, &hdr)
 					incOnSuccess(&a.entries, err)
-					return err
-				})
+				} else {
+					h, p, fInfo := hdr, path, fi
+					select {
+					case taskCh <- func() error {
+						h.Method = Store
+						h.CompressedSize64 = 0
+						h.UncompressedSize64 = 0
+						h.CRC32 = 0
+						if a.options.xattrs {
+							sysXattrs(p, &h)
+						}
+						h.Extra = appendUnix000dExtra(h.Extra, &h)
+						err := a.createSpecialFile(fInfo, &h)
+						incOnSuccess(&a.entries, err)
+						return err
+					}:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
 				break
 			}
 
@@ -607,27 +650,30 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 				hdr.Method = a.options.method
 			}
 
-			if fp == nil {
-				err = a.createFile(ctx, path, fi, &hdr, nil)
+			if fp == nil || concurrency <= 1 {
+				var f *filepool.File
+				if fp != nil {
+					f = fp.Get()
+				}
+				err = a.createFile(ctx, path, fi, &hdr, f)
+				if fp != nil {
+					fp.Put(f)
+				}
 				incOnSuccess(&a.entries, err)
 			} else {
-				f := fp.Get()
 				p := path
 				fInfo := fi
 				h := hdr
-				if concurrency == 1 {
-					err = a.createFile(ctx, p, fInfo, &h, f)
-					fp.Put(f)
+				select {
+				case taskCh <- func() error {
+					f := fp.Get()
+					defer fp.Put(f)
+					err := a.createFile(ctx, p, fInfo, &h, f)
 					incOnSuccess(&a.entries, err)
-				} else {
-					limiter <- struct{}{}
-					wg.Go(func() error {
-						defer func() { <-limiter }()
-						err := a.createFile(ctx, p, fInfo, &h, f)
-						fp.Put(f)
-						incOnSuccess(&a.entries, err)
-						return err
-					})
+					return err
+				}:
+				case <-ctx.Done():
+					return ctx.Err()
 				}
 			}
 		}
@@ -635,6 +681,10 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 		if err != nil {
 			return err
 		}
+	}
+
+	if taskCh != nil {
+		close(taskCh)
 	}
 
 	return wg.Wait()
