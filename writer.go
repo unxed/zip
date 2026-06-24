@@ -129,9 +129,14 @@ func (c *chunkSeekWriter) Write(p []byte) (n int, err error) {
 			// Only flush and record if we are NOT at the very end of the file.
 			if c.h.UncompressedSize64 == 0 || c.totalWrite < int64(c.h.UncompressedSize64) {
 				if !c.continuous && (c.origMethod == ZSTD) {
-					c.fw.comp.Close()
-					newComp, _ := c.compFac(c.sink)
-					c.fw.comp = newComp
+					// Используем быстрый сброс словаря вместо тяжелого закрытия и пересоздания
+					if reseter, ok := c.fw.comp.(interface{ ResetDict() }); ok {
+						reseter.ResetDict()
+					} else {
+						c.fw.comp.Close()
+						newComp, _ := c.compFac(c.sink)
+						c.fw.comp = newComp
+					}
 				} else {
 					if f, ok := c.fw.comp.(flusher); ok {
 						f.Flush()
