@@ -1,7 +1,6 @@
 package zip
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"hash/crc32"
@@ -24,17 +23,22 @@ const irregularModes = os.ModeSocket | os.ModeDevice | os.ModeCharDevice | os.Mo
 
 var ErrMinConcurrency = errors.New("concurrency must be at least 1")
 
-var copyBufPool = sync.Pool{
-	New: func() interface{} {
+var copyBufCh = make(chan []byte, 64)
+
+func getCopyBuf() []byte {
+	select {
+	case b := <-copyBufCh:
+		return b
+	default:
 		return make([]byte, 128*1024)
-	},
+	}
 }
 
-// Увеличиваем буфер чтения до 1 МБ для более быстрого I/O с диска
-var bufioReaderPool = sync.Pool{
-	New: func() interface{} {
-		return bufio.NewReaderSize(nil, 1024*1024)
-	},
+func putCopyBuf(b []byte) {
+	select {
+	case copyBufCh <- b:
+	default:
+	}
 }
 
 type ArchiverOption func(*archiverOptions) error
@@ -760,19 +764,17 @@ func (a *Archiver) compressFile(ctx context.Context, r io.ReadSeeker, fi os.File
 		return err
 	}
 
-	br := bufioReaderPool.Get().(*bufio.Reader)
-	defer func() {
-		br.Reset(nil)
-		bufioReaderPool.Put(br)
-	}()
-	br.Reset(r)
+	copyBuf := getCopyBuf()
+	defer putCopyBuf(copyBuf)
 
-	// Используем умеренный буфер (128КБ), чтобы не перегружать RAM при
-	// большом количестве параллельных потоков.
-	copyBufInterface := copyBufPool.Get()
-	copyBuf := copyBufInterface.([]byte)
-	_, err = io.CopyBuffer(io.MultiWriter(fw, tmp.Hasher()), br, copyBuf)
-	copyBufPool.Put(copyBufInterface)
+	writer := &ctxCountHashWriter{
+		w:       fw,
+		written: &a.written,
+		ctx:     ctx,
+		h:       tmp.Hasher(),
+	}
+
+	_, err = io.CopyBuffer(writer, r, copyBuf)
 	dclose(fw, &err)
 	if err != nil {
 		return err
@@ -797,18 +799,18 @@ func (a *Archiver) compressFile(ctx context.Context, r io.ReadSeeker, fi os.File
 		return err
 	}
 
-	br.Reset(tmp)
-	_, err = br.WriteTo(&ctxCountWriter{w, &a.written, ctx})
+	writerFinal := &ctxCountHashWriter{
+		w:       w,
+		written: &a.written,
+		ctx:     ctx,
+	}
+	_, err = io.CopyBuffer(writerFinal, tmp, copyBuf)
 	return err
 }
 
 func (a *Archiver) compressFileSimple(ctx context.Context, r io.Reader, fi os.FileInfo, hdr *FileHeader) error {
-	br := bufioReaderPool.Get().(*bufio.Reader)
-	defer func() {
-		br.Reset(nil)
-		bufioReaderPool.Put(br)
-	}()
-	br.Reset(r)
+	copyBuf := getCopyBuf()
+	defer putCopyBuf(copyBuf)
 
 	a.m.Lock()
 	defer a.m.Unlock()
@@ -818,7 +820,13 @@ func (a *Archiver) compressFileSimple(ctx context.Context, r io.Reader, fi os.Fi
 		return err
 	}
 
-	_, err = br.WriteTo(&ctxCountWriter{w, &a.written, ctx})
+	writer := &ctxCountHashWriter{
+		w:       w,
+		written: &a.written,
+		ctx:     ctx,
+	}
+
+	_, err = io.CopyBuffer(writer, r, copyBuf)
 	return err
 }
 
@@ -844,16 +852,20 @@ func (a *Archiver) createHeaderRaw(fi os.FileInfo, fh *FileHeader) (io.Writer, e
 	return a.zw.CreateRaw(fh)
 }
 
-type ctxCountWriter struct {
+type ctxCountHashWriter struct {
 	w       io.Writer
 	written *int64
 	ctx     context.Context
+	h       io.Writer
 }
 
-func (w *ctxCountWriter) Write(p []byte) (n int, err error) {
+func (w *ctxCountHashWriter) Write(p []byte) (n int, err error) {
 	if err = w.ctx.Err(); err == nil {
 		n, err = w.w.Write(p)
 		atomic.AddInt64(w.written, int64(n))
+		if w.h != nil && n > 0 {
+			w.h.Write(p[:n])
+		}
 	}
 	return n, err
 }
