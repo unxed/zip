@@ -15,8 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/klauspost/compress/flate"
-	"github.com/klauspost/compress/zstd"
 	"github.com/unxed/zip/internal/filepool"
 	zlib4go "github.com/unxed/zlib4go"
 	"golang.org/x/sync/errgroup"
@@ -263,11 +261,11 @@ func NewArchiver(w io.Writer, chroot string, opts ...ArchiverOption) (*Archiver,
 					}
 					return &tzZlib4goCloser{zw: zw, szw: szw}, nil
 				}
-				return flate.NewWriter(w, a.options.level)
+				return newFlateWriterLevel(w, a.options.level), nil
 			})
 		} else if a.options.method == ZSTD {
 			a.zw.RegisterCompressor(ZSTD, func(w io.Writer) (io.WriteCloser, error) {
-				return zstd.NewWriter(w, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(a.options.level)))
+				return newZstdWriterLevel(w, a.options.level)
 			})
 		} else if a.options.method == LZMA {
 			a.zw.RegisterCompressor(LZMA, func(w io.Writer) (io.WriteCloser, error) {
@@ -605,7 +603,7 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 				hdr.Method = a.options.method
 			}
 
-			if fp == nil || (fi.Size() < 32*1024 && !a.options.torrentZip) {
+			if fp == nil {
 				err = a.createFile(ctx, path, fi, &hdr, nil)
 				incOnSuccess(&a.entries, err)
 			} else {

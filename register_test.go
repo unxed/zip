@@ -76,6 +76,65 @@ func TestZstdConcurrencyStress(t *testing.T) {
 		t.Errorf("stress test failed: %v", err)
 	}
 }
+func TestLevelAwarePooling(t *testing.T) {
+	var buf1, buf2 bytes.Buffer
+
+	// 1. Тест пулинга Deflate с кастомными уровнями
+	w1 := newFlateWriterLevel(&buf1, 4).(*pooledFlateWriter)
+	fw1 := w1.fw
+	w1.Close()
+
+	// Получение нового писателя на том же уровне должно вернуть тот же экземпляр
+	w2 := newFlateWriterLevel(&buf2, 4).(*pooledFlateWriter)
+	fw2 := w2.fw
+	w2.Close()
+
+	if fw1 != fw2 {
+		t.Errorf("expected flate.Writer to be reused from the level-aware pool, but got different instances")
+	}
+
+	// Получение писателя на другом уровне не должно переиспользовать прошлый объект
+	w3 := newFlateWriterLevel(&buf2, 5).(*pooledFlateWriter)
+	fw3 := w3.fw
+	w3.Close()
+
+	if fw1 == fw3 {
+		t.Errorf("did not expect flate.Writer from level 4 to be reused for level 5")
+	}
+
+	// 2. Тест пулинга ZSTD с кастомными уровнями
+	zw1, err := newZstdWriterLevel(&buf1, 4)
+	if err != nil {
+		t.Fatalf("failed to create zstd writer: %v", err)
+	}
+	pzw1 := zw1.(*pooledZstdWriter)
+	enc1 := pzw1.enc
+	pzw1.Close()
+
+	zw2, err := newZstdWriterLevel(&buf2, 4)
+	if err != nil {
+		t.Fatalf("failed to create zstd writer: %v", err)
+	}
+	pzw2 := zw2.(*pooledZstdWriter)
+	enc2 := pzw2.enc
+	pzw2.Close()
+
+	if enc1 != enc2 {
+		t.Errorf("expected zstd.Encoder to be reused from the level-aware pool, but got different instances")
+	}
+
+	zw3, err := newZstdWriterLevel(&buf2, 5)
+	if err != nil {
+		t.Fatalf("failed to create zstd writer: %v", err)
+	}
+	pzw3 := zw3.(*pooledZstdWriter)
+	enc3 := pzw3.enc
+	pzw3.Close()
+
+	if enc1 == enc3 {
+		t.Errorf("did not expect zstd.Encoder from level 4 to be reused for level 5")
+	}
+}
 func TestZstd_CorruptedData(t *testing.T) {
 	data := []byte("some data to compress and then corrupt it")
 	buf := new(bytes.Buffer)

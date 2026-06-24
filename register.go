@@ -20,20 +20,42 @@ type Decompressor func(r io.Reader) io.ReadCloser
 
 var flateWriterPool sync.Pool
 
+var (
+	flatePoolsMu sync.Mutex
+	flatePools   = make(map[int]*sync.Pool)
+)
+
+func getFlateWriterPool(level int) *sync.Pool {
+	flatePoolsMu.Lock()
+	defer flatePoolsMu.Unlock()
+	p, ok := flatePools[level]
+	if !ok {
+		p = &sync.Pool{}
+		flatePools[level] = p
+	}
+	return p
+}
+
 type pooledFlateWriter struct {
-	mu sync.Mutex
-	fw *flate.Writer
-	w  io.Writer
+	mu   sync.Mutex
+	fw   *flate.Writer
+	w    io.Writer
+	pool *sync.Pool
 }
 
 func newFlateWriter(w io.Writer) io.WriteCloser {
-	fw, ok := flateWriterPool.Get().(*flate.Writer)
+	return newFlateWriterLevel(w, 5)
+}
+
+func newFlateWriterLevel(w io.Writer, level int) io.WriteCloser {
+	pool := getFlateWriterPool(level)
+	fw, ok := pool.Get().(*flate.Writer)
 	if ok {
 		fw.Reset(w)
 	} else {
-		fw, _ = flate.NewWriter(w, 5) // klauspost default
+		fw, _ = flate.NewWriter(w, level)
 	}
-	return &pooledFlateWriter{fw: fw, w: w}
+	return &pooledFlateWriter{fw: fw, w: w, pool: pool}
 }
 
 func (w *pooledFlateWriter) Write(p []byte) (n int, err error) {
@@ -67,7 +89,11 @@ func (w *pooledFlateWriter) Close() error {
 	var err error
 	if w.fw != nil {
 		err = w.fw.Close()
-		flateWriterPool.Put(w.fw)
+		if w.pool != nil {
+			w.pool.Put(w.fw)
+		} else {
+			flateWriterPool.Put(w.fw)
+		}
 		w.fw = nil
 	}
 	return err
@@ -153,10 +179,27 @@ func newZstdReader(r io.Reader) io.ReadCloser {
 
 var zstdWriterPool sync.Pool
 
+var (
+	zstdPoolsMu sync.Mutex
+	zstdPools   = make(map[int]*sync.Pool)
+)
+
+func getZstdWriterPool(level int) *sync.Pool {
+	zstdPoolsMu.Lock()
+	defer zstdPoolsMu.Unlock()
+	p, ok := zstdPools[level]
+	if !ok {
+		p = &sync.Pool{}
+		zstdPools[level] = p
+	}
+	return p
+}
+
 type pooledZstdWriter struct {
-	mu  sync.Mutex
-	enc *zstd.Encoder
-	w   io.Writer
+	mu   sync.Mutex
+	enc  *zstd.Encoder
+	w    io.Writer
+	pool *sync.Pool
 }
 
 func (pw *pooledZstdWriter) Write(p []byte) (int, error) {
@@ -191,22 +234,31 @@ func (pw *pooledZstdWriter) Close() error {
 	var err error
 	if pw.enc != nil {
 		err = pw.enc.Close()
-		zstdWriterPool.Put(pw.enc)
+		if pw.pool != nil {
+			pw.pool.Put(pw.enc)
+		} else {
+			zstdWriterPool.Put(pw.enc)
+		}
 		pw.enc = nil
 	}
 	return err
 }
 
 func newZstdWriter(w io.Writer) (io.WriteCloser, error) {
-	enc, _ := zstdWriterPool.Get().(*zstd.Encoder)
+	return newZstdWriterLevel(w, 3)
+}
+
+func newZstdWriterLevel(w io.Writer, level int) (io.WriteCloser, error) {
+	pool := getZstdWriterPool(level)
+	enc, _ := pool.Get().(*zstd.Encoder)
 	if enc == nil {
-		enc, _ = zstd.NewWriter(nil, zstd.WithEncoderCRC(false))
+		enc, _ = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(level)), zstd.WithEncoderCRC(false))
 	}
 	if enc == nil {
 		return nil, errors.New("zip: zstd encoder initialization failed")
 	}
 	enc.Reset(w)
-	return &pooledZstdWriter{enc: enc, w: w}, nil
+	return &pooledZstdWriter{enc: enc, w: w, pool: pool}, nil
 }
 
 type nopCloser struct {
