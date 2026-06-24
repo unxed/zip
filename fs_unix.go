@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+	"sync"
 
 	"golang.org/x/sys/unix"
 )
@@ -56,6 +57,51 @@ func getAlternativeDataStreams(path string) ([]string, error) {
 	return nil, nil
 }
 
+var (
+	userCache   = make(map[uint32]string)
+	groupCache  = make(map[uint32]string)
+	idCacheLock sync.RWMutex
+)
+
+func getUsername(uid uint32) string {
+	idCacheLock.RLock()
+	name, ok := userCache[uid]
+	idCacheLock.RUnlock()
+	if ok {
+		return name
+	}
+	idCacheLock.Lock()
+	defer idCacheLock.Unlock()
+	if name, ok := userCache[uid]; ok {
+		return name
+	}
+	if u, err := user.LookupId(strconv.Itoa(int(uid))); err == nil {
+		userCache[uid] = u.Username
+		return u.Username
+	}
+	userCache[uid] = ""
+	return ""
+}
+
+func getGroupname(gid uint32) string {
+	idCacheLock.RLock()
+	name, ok := groupCache[gid]
+	idCacheLock.RUnlock()
+	if ok {
+		return name
+	}
+	idCacheLock.Lock()
+	defer idCacheLock.Unlock()
+	if name, ok := groupCache[gid]; ok {
+		return name
+	}
+	if g, err := user.LookupGroupId(strconv.Itoa(int(gid))); err == nil {
+		groupCache[gid] = g.Name
+		return g.Name
+	}
+	groupCache[gid] = ""
+	return ""
+}
 func appendPlatformExtra(fi os.FileInfo, hdr *FileHeader, force bool) {
 	if !force {
 		return
@@ -64,11 +110,11 @@ func appendPlatformExtra(fi os.FileInfo, hdr *FileHeader, force bool) {
 		hdr.Uid = int(stat.Uid)
 		hdr.Gid = int(stat.Gid)
 		hdr.OwnerSet = true
-		if u, err := user.LookupId(strconv.Itoa(int(stat.Uid))); err == nil {
-			hdr.Uname = u.Username
+		if uname := getUsername(stat.Uid); uname != "" {
+			hdr.Uname = uname
 		}
-		if g, err := user.LookupGroupId(strconv.Itoa(int(stat.Gid))); err == nil {
-			hdr.Gname = g.Name
+		if gname := getGroupname(stat.Gid); gname != "" {
+			hdr.Gname = gname
 		}
 	}
 	sysPlatformExtra(fi, hdr)
