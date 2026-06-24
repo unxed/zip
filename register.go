@@ -169,7 +169,7 @@ func (r *pooledZstdReader) Close() error {
 func newZstdReader(r io.Reader) io.ReadCloser {
 	dec, _ := zstdReaderPool.Get().(*zstd.Decoder)
 	if dec == nil {
-		dec, _ = zstd.NewReader(nil, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxWindow(128<<20))
+		dec, _ = zstd.NewReader(nil, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxWindow(512<<20), zstd.WithDecoderMaxMemory(512<<20))
 	}
 	if dec != nil {
 		dec.Reset(r)

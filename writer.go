@@ -88,8 +88,11 @@ type flusher interface {
 
 type chunkSeekWriter struct {
 	h          *header
-	comp       io.WriteCloser
+	fw         *fileWriter
+	compFac    Compressor
+	sink       io.Writer
 	base       *countWriter // physically writes to zip
+	origMethod uint16
 	chunkSize  uint32
 	written    uint32
 	dataStart  int64
@@ -105,7 +108,7 @@ func (c *chunkSeekWriter) Write(p []byte) (n int, err error) {
 			toWrite = len(p)
 		}
 
-		wn, err := c.comp.Write(p[:toWrite])
+		wn, err := c.fw.comp.Write(p[:toWrite])
 		if err != nil {
 			return n, err
 		}
@@ -125,8 +128,14 @@ func (c *chunkSeekWriter) Write(p []byte) (n int, err error) {
 		if c.written >= c.chunkSize {
 			// Only flush and record if we are NOT at the very end of the file.
 			if c.h.UncompressedSize64 == 0 || c.totalWrite < int64(c.h.UncompressedSize64) {
-				if f, ok := c.comp.(flusher); ok {
-					f.Flush()
+				if !c.continuous && (c.origMethod == ZSTD) {
+					c.fw.comp.Close()
+					newComp, _ := c.compFac(c.sink)
+					c.fw.comp = newComp
+				} else {
+					if f, ok := c.fw.comp.(flusher); ok {
+						f.Flush()
+					}
 				}
 
 				// Record relative offset from the start of compressed data AFTER flush
@@ -144,7 +153,7 @@ func (c *chunkSeekWriter) Write(p []byte) (n int, err error) {
 					c.h.GzidxPoints = append(c.h.GzidxPoints, pt)
 				} else {
 					// Clear the dictionary to make the next chunk completely independent
-					if r, ok := c.comp.(interface{ ResetDict() }); ok {
+					if r, ok := c.fw.comp.(interface{ ResetDict() }); ok {
 						r.ResetDict()
 					}
 					c.h.SeekIndex = append(c.h.SeekIndex, uint64(relativeOffset))
@@ -534,8 +543,11 @@ func (w *Writer) CreateHeader(fh *FileHeader) (io.Writer, error) {
 		if fh.SeekChunkSize > 0 && originalMethod != Store {
 			csw := &chunkSeekWriter{
 				h:          h,
-				comp:       fw.comp,
+				fw:         fw,
+				compFac:    comp,
+				sink:       sink,
 				base:       fw.compCount,
+				origMethod: originalMethod,
 				chunkSize:  fh.SeekChunkSize,
 				dataStart:  fw.compCount.count,
 				continuous: fh.SeekContinuous,
