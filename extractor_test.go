@@ -1085,3 +1085,28 @@ func TestExternalZip_Zip(t *testing.T) {
 		t.Errorf("Content mismatch in sub/file2.txt: expected 'nested external zip data', got %q", string(data2))
 	}
 }
+func TestExtractor_WorkerPool_Cancellation(t *testing.T) {
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "cancel.zip")
+	dstDir := filepath.Join(tmpDir, "dst")
+
+	f, _ := os.Create(zipPath)
+	zw := NewWriter(f)
+	for i := 0; i < 10; i++ {
+		w, _ := zw.Create(fmt.Sprintf("file_%d.txt", i))
+		w.Write([]byte("data"))
+	}
+	zw.Close()
+	f.Close()
+
+	e, _ := NewExtractor(zipPath, dstDir, WithExtractorConcurrency(4))
+	defer e.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	err := e.Extract(ctx)
+	if err == nil || err != context.Canceled {
+		t.Errorf("expected context.Canceled, got %v", err)
+	}
+}

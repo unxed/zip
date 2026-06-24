@@ -420,7 +420,13 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 			return innerExtractor.Extract(ctx)
 		}
 	} else {
-		limiter := make(chan struct{}, e.options.concurrency)
+		type extractTask struct {
+			file        *File
+			path        string
+			isIrregular bool
+		}
+
+		taskCh := make(chan extractTask, e.options.concurrency)
 
 		wg, ctx := errgroup.WithContext(ctx)
 		defer func() {
@@ -429,7 +435,38 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 			}
 		}()
 
+		for i := 0; i < e.options.concurrency; i++ {
+			wg.Go(func() error {
+				for task := range taskCh {
+					if ctx.Err() != nil {
+						continue
+					}
+					var err error
+					if task.isIrregular {
+						err = extractSpecialFile(task.path, &task.file.FileHeader)
+						if err == nil {
+							err = e.updateFileMetadata(task.path, task.file)
+						}
+					} else {
+						err = e.createFile(ctx, task.path, task.file)
+						if err == nil {
+							err = e.updateFileMetadata(task.path, task.file)
+						}
+					}
+					if err != nil {
+						if e.options.tolerant {
+							fmt.Printf("zip: skipping corrupted file %q: %v\n", task.file.Name, err)
+						} else {
+							return err
+						}
+					}
+				}
+				return nil
+			})
+		}
+
 		err = func() error {
+			defer close(taskCh)
 			for i, file := range e.zr.File {
 				name := file.Name
 				if e.options.stripComponents > 0 {
@@ -493,33 +530,18 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 					err = e.createDirectory(path, file)
 
 				case file.Mode()&irregularModes != 0:
-					limiter <- struct{}{}
-					gf := e.zr.File[i]
-					p := path
-					wg.Go(func() error {
-						defer func() { <-limiter }()
-						err := extractSpecialFile(p, &gf.FileHeader)
-						if err == nil {
-							err = e.updateFileMetadata(p, gf)
-						}
-						return err
-					})
+					select {
+					case taskCh <- extractTask{file: e.zr.File[i], path: path, isIrregular: true}:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
 
 				default:
-					limiter <- struct{}{}
-					gf, p := e.zr.File[i], path // Local copies
-					wg.Go(func() error {
-						defer func() { <-limiter }()
-						err := e.createFile(ctx, p, gf)
-						if err == nil {
-							err = e.updateFileMetadata(p, gf)
-						}
-						if err != nil && e.options.tolerant {
-							fmt.Printf("zip: skipping corrupted file %q: %v\n", gf.Name, err)
-							return nil // Suppress error to continue
-						}
-						return err
-					})
+					select {
+					case taskCh <- extractTask{file: e.zr.File[i], path: path, isIrregular: false}:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
 				}
 				if err != nil && !e.options.tolerant {
 					return err
@@ -536,7 +558,7 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 			return waitErr
 		}
 
-		for _, file := range e.zr.File {
+        for _, file := range e.zr.File {
 			if file.Mode()&os.ModeSymlink == 0 && file.Linkname == "" {
 				continue
 			}
