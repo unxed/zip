@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"golang.org/x/sync/errgroup"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 func TestZstdCompressionLoop(t *testing.T) {
@@ -133,6 +135,29 @@ func TestLevelAwarePooling(t *testing.T) {
 
 	if enc1 == enc3 {
 		t.Errorf("did not expect zstd.Encoder from level 4 to be reused for level 5")
+	}
+}
+func TestZstdLargeWindowDecompression(t *testing.T) {
+	data := []byte("verification of zstd large window decoding capability")
+
+	var compBuf bytes.Buffer
+	enc, err := zstd.NewWriter(&compBuf)
+	if err != nil {
+		t.Fatalf("failed to create zstd encoder: %v", err)
+	}
+	enc.Write(data)
+	enc.Close()
+
+	dec := newZstdReader(&compBuf)
+	defer dec.Close()
+
+	decompressed, err := io.ReadAll(dec)
+	if err != nil {
+		t.Fatalf("failed to decompress data: %v", err)
+	}
+
+	if !bytes.Equal(decompressed, data) {
+		t.Errorf("content mismatch: got %q, want %q", string(decompressed), string(data))
 	}
 }
 func TestZstd_CorruptedData(t *testing.T) {
