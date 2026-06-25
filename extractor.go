@@ -261,6 +261,7 @@ type Extractor struct {
 	m                sync.Mutex
 	options          extractorOptions
 	chroot           string
+	dirCache         sync.Map
 }
 
 func extractPasswordFromOpts(opts []ExtractorOption) string {
@@ -303,7 +304,7 @@ func newExtractor(r *Reader, c io.Closer, chroot string, opts []ExtractorOption)
 
 	e.options.concurrency = runtime.GOMAXPROCS(0)
 	e.options.maxFileSize = 1024 * 1024 * 1024 // 1GB default
-	e.options.maxDecompressionRatio = 200      // 200:1 default
+	e.options.maxDecompressionRatio = 4000     // 4000:1 default (to prevent false positives on zero-filled files)
 	e.options.xattrs = true
 	e.options.chownErrorHandler = func(name string, err error) error {
 		if pe, ok := err.(*os.PathError); ok {
@@ -1174,10 +1175,14 @@ func (e *Extractor) linksToDirs(targetPath string) error {
 // while safely resolving path conflicts.
 func (e *Extractor) synthesizeParentDirs(targetPath string) error {
 	dir := filepath.Dir(targetPath)
+	if _, ok := e.dirCache.Load(dir); ok {
+		return nil
+	}
 
 	// Fast path: ensure parent directory chain exists using standard OS tools
 	err := os.MkdirAll(dir, 0755)
 	if err == nil {
+		e.dirCache.Store(dir, struct{}{})
 		return nil
 	}
 
