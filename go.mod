@@ -6,7 +6,7 @@ require (
 	github.com/dovydenkovas/ppmd v0.1.1
 	github.com/klauspost/compress v1.18.7-0.20260521203646-ecdb779d8745
 	github.com/unxed/par2 v0.1.2
-	github.com/unxed/xz v0.1.17
+	github.com/unxed/xz v0.1.18
 	github.com/unxed/zipcharset v0.1.4
 	github.com/unxed/zlib4go v0.1.11
 	golang.org/x/crypto v0.31.0
