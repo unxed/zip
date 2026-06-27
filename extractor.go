@@ -122,22 +122,19 @@ func WithExtractorSparse(b bool) ExtractorOption {
 	}
 }
 
-var sparseBufCh = make(chan []byte, 64)
+var sparseBufPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 1024*1024)
+		return &b
+	},
+}
 
 func getSparseBuf() []byte {
-	select {
-	case b := <-sparseBufCh:
-		return b
-	default:
-		return make([]byte, 1024*1024)
-	}
+	return *(sparseBufPool.Get().(*[]byte))
 }
 
 func putSparseBuf(b []byte) {
-	select {
-	case sparseBufCh <- b:
-	default:
-	}
+	sparseBufPool.Put(&b)
 }
 
 func isAllZeros(p []byte) bool {
@@ -1039,16 +1036,30 @@ func (e *Extractor) createFile(ctx context.Context, path string, file *File) (er
 	if e.options.sparse {
 		err = copySparseZip(f, lr, file.UncompressedSize64, &e.written, ctx)
 	} else {
-		// Гарантируем использование 1МБ буфера при распаковке
 		buf := getSparseBuf()
 		defer putSparseBuf(buf)
 
-		writer := &ctxCountHashWriter{
-			w:       f,
-			written: &e.written,
-			ctx:     ctx,
+		for {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			n, errRead := lr.Read(buf)
+			if n > 0 {
+				wn, werr := f.Write(buf[:n])
+				atomic.AddInt64(&e.written, int64(wn))
+				if werr != nil {
+					err = werr
+					break
+				}
+			}
+			if errRead == io.EOF {
+				break
+			}
+			if errRead != nil {
+				err = errRead
+				break
+			}
 		}
-		_, err = io.CopyBuffer(writer, lr, buf)
 	}
 
 	// If we read everything allowed by the limit, but data still remains in the source reader - it's a bomb

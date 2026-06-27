@@ -23,22 +23,19 @@ const irregularModes = os.ModeSocket | os.ModeDevice | os.ModeCharDevice | os.Mo
 
 var ErrMinConcurrency = errors.New("concurrency must be at least 1")
 
-var copyBufCh = make(chan []byte, 64)
+var copyBufPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 128*1024)
+		return &b
+	},
+}
 
 func getCopyBuf() []byte {
-	select {
-	case b := <-copyBufCh:
-		return b
-	default:
-		return make([]byte, 128*1024)
-	}
+	return *(copyBufPool.Get().(*[]byte))
 }
 
 func putCopyBuf(b []byte) {
-	select {
-	case copyBufCh <- b:
-	default:
-	}
+	copyBufPool.Put(&b)
 }
 
 type ArchiverOption func(*archiverOptions) error
@@ -817,14 +814,32 @@ func (a *Archiver) compressFile(ctx context.Context, r io.ReadSeeker, fi os.File
 	copyBuf := getCopyBuf()
 	defer putCopyBuf(copyBuf)
 
-	writer := &ctxCountHashWriter{
-		w:       fw,
-		written: &a.written,
-		ctx:     ctx,
-		h:       tmp.Hasher(),
+	hasher := tmp.Hasher()
+	for {
+		if err := ctx.Err(); err != nil {
+			dclose(fw, &err)
+			return err
+		}
+		n, errRead := r.Read(copyBuf)
+		if n > 0 {
+			wn, werr := fw.Write(copyBuf[:n])
+			atomic.AddInt64(&a.written, int64(wn))
+			if hasher != nil {
+				hasher.Write(copyBuf[:wn])
+			}
+			if werr != nil {
+				err = werr
+				break
+			}
+		}
+		if errRead == io.EOF {
+			break
+		}
+		if errRead != nil {
+			err = errRead
+			break
+		}
 	}
-
-	_, err = io.CopyBuffer(writer, r, copyBuf)
 	dclose(fw, &err)
 	if err != nil {
 		return err
@@ -849,13 +864,26 @@ func (a *Archiver) compressFile(ctx context.Context, r io.ReadSeeker, fi os.File
 		return err
 	}
 
-	writerFinal := &ctxCountHashWriter{
-		w:       w,
-		written: &a.written,
-		ctx:     ctx,
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		n, errRead := tmp.Read(copyBuf)
+		if n > 0 {
+			wn, werr := w.Write(copyBuf[:n])
+			atomic.AddInt64(&a.written, int64(wn))
+			if werr != nil {
+				return werr
+			}
+		}
+		if errRead == io.EOF {
+			break
+		}
+		if errRead != nil {
+			return errRead
+		}
 	}
-	_, err = io.CopyBuffer(writerFinal, tmp, copyBuf)
-	return err
+	return nil
 }
 
 func (a *Archiver) compressFileSimple(ctx context.Context, r io.Reader, fi os.FileInfo, hdr *FileHeader) error {
@@ -870,14 +898,26 @@ func (a *Archiver) compressFileSimple(ctx context.Context, r io.Reader, fi os.Fi
 		return err
 	}
 
-	writer := &ctxCountHashWriter{
-		w:       w,
-		written: &a.written,
-		ctx:     ctx,
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		n, errRead := r.Read(copyBuf)
+		if n > 0 {
+			wn, werr := w.Write(copyBuf[:n])
+			atomic.AddInt64(&a.written, int64(wn))
+			if werr != nil {
+				return werr
+			}
+		}
+		if errRead == io.EOF {
+			break
+		}
+		if errRead != nil {
+			return errRead
+		}
 	}
-
-	_, err = io.CopyBuffer(writer, r, copyBuf)
-	return err
+	return nil
 }
 
 func (a *Archiver) createHeaderRaw(fi os.FileInfo, fh *FileHeader) (io.Writer, error) {
@@ -902,23 +942,7 @@ func (a *Archiver) createHeaderRaw(fi os.FileInfo, fh *FileHeader) (io.Writer, e
 	return a.zw.CreateRaw(fh)
 }
 
-type ctxCountHashWriter struct {
-	w       io.Writer
-	written *int64
-	ctx     context.Context
-	h       io.Writer
-}
-
-func (w *ctxCountHashWriter) Write(p []byte) (n int, err error) {
-	if err = w.ctx.Err(); err == nil {
-		n, err = w.w.Write(p)
-		atomic.AddInt64(w.written, int64(n))
-		if w.h != nil && n > 0 {
-			w.h.Write(p[:n])
-		}
-	}
-	return n, err
-}
+// Removed ctxCountHashWriter to reduce heap allocations
 
 func dclose(c io.Closer, err *error) {
 	if cerr := c.Close(); cerr != nil && *err == nil {
