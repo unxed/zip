@@ -481,3 +481,96 @@ func TestArchiver_DifferentDrivesWindows(t *testing.T) {
 		t.Fatalf("expected success, got error: %v", err)
 	}
 }
+func TestArchiver_CompressionHeuristics(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "src")
+	os.MkdirAll(srcDir, 0755)
+
+	// 1. Тест на эффективность сжатия мелкого текста (раньше было 104%, теперь должно быть < 100%)
+	// Генерируем текст с высокой энтропией Хаффмана, но плохим LZ77 (короткий, без повторов строк)
+	textPath := filepath.Join(srcDir, "small_text.txt")
+	var textBuf bytes.Buffer
+	for i := 0; i < 500; i++ {
+		textBuf.WriteString(fmt.Sprintf("line %d: some unique text content here\n", i))
+	}
+	os.WriteFile(textPath, textBuf.Bytes(), 0644)
+
+	// 2. Тест на защиту нулей (не должны сжиматься через HuffmanOnly, иначе ratio будет ~12%)
+	zeroPath := filepath.Join(srcDir, "zeros.bin")
+	os.WriteFile(zeroPath, make([]byte, 1024*10), 0644)
+
+	zipPath := filepath.Join(tmpDir, "heuristics.zip")
+	f, _ := os.Create(zipPath)
+
+	// Используем уровень 1 (BestSpeed), на котором раньше были аномалии
+	a, _ := NewArchiver(f, srcDir, WithArchiverLevel(1), WithArchiverMethod(Deflate))
+
+	files := make(map[string]os.FileInfo)
+	filepath.Walk(srcDir, func(p string, info os.FileInfo, err error) error {
+		if p != srcDir {
+			files[p] = info
+		}
+		return nil
+	})
+
+	if err := a.Archive(context.Background(), files); err != nil {
+		t.Fatalf("Archive failed: %v", err)
+	}
+	a.Close()
+	f.Close()
+
+	zr, _ := OpenReader(zipPath)
+	defer zr.Close()
+
+	for _, file := range zr.File {
+		ratio := float64(file.CompressedSize64) / float64(file.UncompressedSize64) * 100
+		if file.Name == "small_text.txt" {
+			if ratio >= 100 {
+				t.Errorf("Small text anomaly: ratio is %.2f%%, expected < 100%%", ratio)
+			}
+			t.Logf("Small text ratio: %.2f%% (OK)", ratio)
+		}
+		if file.Name == "zeros.bin" {
+			// LZ77 сожмет 10КБ нулей почти в ноль (десятки байт).
+			// Хаффман сожмет 10КБ нулей до ~1.2КБ (12.5%).
+			if ratio > 5 {
+				t.Errorf("Zeros bloat anomaly: ratio is %.2f%%, expected < 5%% (LZ77 should be used)", ratio)
+			}
+			t.Logf("Zeros ratio: %.2f%% (OK)", ratio)
+		}
+	}
+}
+
+func TestArchiver_TorrentZipConsistencyWithHeuristics(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "src")
+	os.MkdirAll(srcDir, 0755)
+
+	// Создаем "идеальный" файл для Хаффмана (много уникальных символов, мало повторов)
+	// Эвристика analyzeBlock захотела бы включить HuffmanOnly (Level -2)
+	path := filepath.Join(srcDir, "huffman_bait.txt")
+	data := make([]byte, 8192)
+	for i := range data {
+		data[i] = byte(i % 256)
+	}
+	os.WriteFile(path, data, 0644)
+
+	zipPath := filepath.Join(tmpDir, "tz_test.zip")
+	f, _ := os.Create(zipPath)
+
+	// В режиме TorrentZip уровень ВСЕГДА должен оставаться 9 (LZ77)
+	a, _ := NewArchiver(f, srcDir, WithArchiverTorrentZip(true))
+	info, _ := os.Stat(path)
+	a.Archive(context.Background(), map[string]os.FileInfo{path: info})
+	a.Close()
+	f.Close()
+
+	zr, _ := OpenReader(zipPath)
+	defer zr.Close()
+
+	// На уровне 9 LZ77 на таком паттерне (0..255 повторяется) сработает идеально.
+	// Если бы включился HuffmanOnly, размер был бы точно 8192 + оверхед Хаффмана.
+	if zr.File[0].CompressedSize64 > 500 {
+		t.Errorf("TorrentZip likely used HuffmanOnly instead of Level 9 LZ77: comp size %d", zr.File[0].CompressedSize64)
+	}
+}

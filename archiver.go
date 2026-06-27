@@ -789,14 +789,21 @@ func analyzeBlock(p []byte) (store, huffmanOnly bool) {
 	}
 	var freq [256]uint32
 	unique := 0
+	maxFreq := uint32(0)
 	for _, b := range p {
 		if freq[b] == 0 {
 			unique++
 		}
 		freq[b]++
+		if freq[b] > maxFreq {
+			maxFreq = freq[b]
+		}
 	}
 	if unique > 224 {
 		return true, false
+	}
+	if maxFreq > uint32(len(p)/4) {
+		return false, false
 	}
 	if unique <= 136 {
 		return false, true
@@ -805,7 +812,7 @@ func analyzeBlock(p []byte) (store, huffmanOnly bool) {
 }
 
 func (a *Archiver) compressFile(ctx context.Context, r io.ReadSeeker, fi os.FileInfo, hdr *FileHeader, tmp *filepool.File) error {
-	if hdr.UncompressedSize64 >= 1024*1024 && hdr.Method == Deflate {
+	if !a.options.torrentZip && hdr.UncompressedSize64 >= 4096 && hdr.Method == Deflate {
 		var peekBuf [64 * 1024]byte
 		n, _ := io.ReadFull(r, peekBuf[:])
 		r.Seek(0, io.SeekStart)
@@ -837,6 +844,11 @@ func (a *Archiver) compressFile(ctx context.Context, r io.ReadSeeker, fi os.File
 	}
 
 	comp := a.zw.compressor(hdr.Method)
+	if !a.options.torrentZip && hdr.Method == Deflate && hdr.Level != 0 {
+		comp = func(w io.Writer) (io.WriteCloser, error) {
+			return newFlateWriterLevel(w, hdr.Level), nil
+		}
+	}
 	if comp == nil || tmp == nil {
 		return a.compressFileSimple(ctx, r, fi, hdr)
 	}
@@ -887,6 +899,7 @@ func (a *Archiver) compressFile(ctx context.Context, r io.ReadSeeker, fi os.File
 	if hdr.CompressedSize64 > hdr.UncompressedSize64+4096 && !a.options.torrentZip {
 		r.Seek(0, io.SeekStart)
 		hdr.Method = Store
+		atomic.AddInt64(&a.written, -int64(hdr.UncompressedSize64))
 		return a.compressFileSimple(ctx, r, fi, hdr)
 	}
 	hdr.CRC32 = tmp.Checksum()
@@ -905,8 +918,7 @@ func (a *Archiver) compressFile(ctx context.Context, r io.ReadSeeker, fi os.File
 		}
 		n, errRead := tmp.Read(copyBuf)
 		if n > 0 {
-			wn, werr := w.Write(copyBuf[:n])
-			atomic.AddInt64(&a.written, int64(wn))
+			_, werr := w.Write(copyBuf[:n])
 			if werr != nil {
 				return werr
 			}
