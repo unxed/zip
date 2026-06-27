@@ -25,7 +25,7 @@ var ErrMinConcurrency = errors.New("concurrency must be at least 1")
 
 var copyBufPool = sync.Pool{
 	New: func() interface{} {
-		b := make([]byte, 128*1024)
+		b := make([]byte, 1024*1024)
 		return &b
 	},
 }
@@ -849,7 +849,7 @@ func (a *Archiver) compressFile(ctx context.Context, r io.ReadSeeker, fi os.File
 		hdr.Flags |= 0x8
 	}
 	hdr.CompressedSize64 = tmp.Written()
-	if hdr.CompressedSize64 > hdr.UncompressedSize64 && !a.options.torrentZip {
+	if hdr.CompressedSize64 > hdr.UncompressedSize64+4096 && !a.options.torrentZip {
 		r.Seek(0, io.SeekStart)
 		hdr.Method = Store
 		return a.compressFileSimple(ctx, r, fi, hdr)

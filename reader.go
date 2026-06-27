@@ -288,6 +288,9 @@ func (rc *ReadCloser) Close() error {
 	return rc.f.Close()
 }
 
+func (f *File) HeaderOffset() int64 {
+	return f.headerOffset
+}
 func (f *File) DataOffset() (offset int64, err error) {
 	bodyOffset, err := f.findBodyOffset()
 	if err != nil {
