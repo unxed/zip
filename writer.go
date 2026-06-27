@@ -529,6 +529,11 @@ func (w *Writer) CreateHeader(fh *FileHeader) (io.Writer, error) {
 		}
 
 		comp := w.compressor(originalMethod)
+		if originalMethod == Deflate && fh.Level != 0 {
+			comp = func(w io.Writer) (io.WriteCloser, error) {
+				return newFlateWriterLevel(w, fh.Level), nil
+			}
+		}
 		if comp == nil {
 			return nil, ErrAlgorithm
 		}

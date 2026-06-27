@@ -1135,7 +1135,11 @@ func (e *Extractor) absPath(name string) (string, error) {
 	if strings.Contains(name, MappedStringMarkStr) {
 		name = string(encodeMappedString(name))
 	}
-	return filepath.Abs(filepath.Join(e.chroot, name))
+	cleanName := filepath.ToSlash(filepath.Clean(name))
+	if strings.HasPrefix(cleanName, "../") || strings.HasPrefix(cleanName, "/") {
+		return "", ErrInsecurePath
+	}
+	return filepath.Join(e.chroot, cleanName), nil
 }
 
 type ctxReader struct {

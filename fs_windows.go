@@ -195,7 +195,7 @@ func appendPlatformExtra(fi os.FileInfo, hdr *FileHeader, force bool) {
 	// Not applicable on Windows for standard ZIP UID/GID fields
 }
 func preallocate(f *os.File, size int64) error {
-	if size <= 0 {
+	if size <= 1024*1024 {
 		return nil
 	}
 	// 1. Set physical allocation size on disk (reserves contiguous clusters on NTFS to prevent fragmentation)

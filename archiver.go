@@ -783,7 +783,42 @@ func (a *Archiver) createFile(ctx context.Context, path string, fi os.FileInfo, 
 	return a.compressFile(ctx, f, fi, hdr, tmp)
 }
 
+func analyzeBlock(p []byte) (store, huffmanOnly bool) {
+	if len(p) < 4096 {
+		return false, false
+	}
+	var freq [256]uint32
+	unique := 0
+	for _, b := range p {
+		if freq[b] == 0 {
+			unique++
+		}
+		freq[b]++
+	}
+	if unique > 224 {
+		return true, false
+	}
+	if unique <= 136 {
+		return false, true
+	}
+	return false, false
+}
+
 func (a *Archiver) compressFile(ctx context.Context, r io.ReadSeeker, fi os.FileInfo, hdr *FileHeader, tmp *filepool.File) error {
+	if hdr.UncompressedSize64 >= 1024*1024 && hdr.Method == Deflate {
+		var peekBuf [64 * 1024]byte
+		n, _ := io.ReadFull(r, peekBuf[:])
+		r.Seek(0, io.SeekStart)
+		if n > 0 {
+			store, huffmanOnly := analyzeBlock(peekBuf[:n])
+			if store {
+				hdr.Method = Store
+			} else if huffmanOnly {
+				hdr.Level = -2 // flate.HuffmanOnly
+			}
+		}
+	}
+
 	if a.options.torrentZip && hdr.UncompressedSize64 == 0 {
 		a.m.Lock()
 		defer a.m.Unlock()

@@ -9,7 +9,7 @@ import (
 )
 
 func preallocate(f *os.File, size int64) error {
-	if size <= 0 {
+	if size <= 1024*1024 {
 		return nil
 	}
 	err := unix.Fallocate(int(f.Fd()), 0, 0, size)

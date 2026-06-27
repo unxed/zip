@@ -4,6 +4,7 @@
 package zip
 
 import (
+    "sync"
 	"os"
 	"os/user"
 	"strconv"
@@ -55,20 +56,56 @@ func resolveIds(hdr *FileHeader, numericOwner bool) (int, int) {
 	return uid, gid
 }
 
+var (
+	uidCache   = make(map[string]int)
+	gidCache   = make(map[string]int)
+	resolveMut sync.RWMutex
+)
+
 func lookupUser(name string) (int, error) {
+	resolveMut.RLock()
+	id, ok := uidCache[name]
+	resolveMut.RUnlock()
+	if ok {
+		return id, nil
+	}
+
 	u, err := user.Lookup(name)
 	if err != nil {
 		return -1, err
 	}
-	return strconv.Atoi(u.Uid)
+	id, err = strconv.Atoi(u.Uid)
+	if err != nil {
+		return -1, err
+	}
+
+	resolveMut.Lock()
+	uidCache[name] = id
+	resolveMut.Unlock()
+	return id, nil
 }
 
 func lookupGroup(name string) (int, error) {
+	resolveMut.RLock()
+	id, ok := gidCache[name]
+	resolveMut.RUnlock()
+	if ok {
+		return id, nil
+	}
+
 	g, err := user.LookupGroup(name)
 	if err != nil {
 		return -1, err
 	}
-	return strconv.Atoi(g.Gid)
+	id, err = strconv.Atoi(g.Gid)
+	if err != nil {
+		return -1, err
+	}
+
+	resolveMut.Lock()
+	gidCache[name] = id
+	resolveMut.Unlock()
+	return id, nil
 }
 func createWindowsSymlink(target, link string, isDir bool) error {
 	return nil // No-op on Unix, never called due to runtime.GOOS check

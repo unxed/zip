@@ -155,6 +155,7 @@ type FileHeader struct {
 	// WinZip AES encryption
 	Password    string
 	AESStrength byte // 1 = 128, 2 = 192, 3 = 256. Defaults to 3 (AES-256) if Password != ""
+	Level       int
 }
 
 func (h *FileHeader) SetComment(comment string) {
