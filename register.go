@@ -44,7 +44,7 @@ type pooledFlateWriter struct {
 }
 
 func newFlateWriter(w io.Writer) io.WriteCloser {
-	return newFlateWriterLevel(w, 5)
+	return newFlateWriterLevel(w, flate.DefaultCompression)
 }
 
 func newFlateWriterLevel(w io.Writer, level int) io.WriteCloser {
