@@ -574,3 +574,85 @@ func TestArchiver_TorrentZipConsistencyWithHeuristics(t *testing.T) {
 		t.Errorf("TorrentZip likely used HuffmanOnly instead of Level 9 LZ77: comp size %d", zr.File[0].CompressedSize64)
 	}
 }
+func TestArchiver_ParallelEncryption(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "src")
+	dstDir := filepath.Join(tmpDir, "dst")
+	os.MkdirAll(srcDir, 0755)
+
+	password := "parallel-password-123"
+
+	// Create multiple files to force concurrency > 1
+	filesToCreate := map[string]string{
+		"file1.txt": "parallel encrypted content 1",
+		"file2.txt": "parallel encrypted content 2",
+		"file3.txt": "parallel encrypted content 3",
+		"file4.txt": "parallel encrypted content 4",
+		"file5.txt": "parallel encrypted content 5",
+	}
+
+	for path, content := range filesToCreate {
+		fullPath := filepath.Join(srcDir, path)
+		os.MkdirAll(filepath.Dir(fullPath), 0755)
+		if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
+			t.Fatalf("failed to create test file: %v", err)
+		}
+	}
+
+	zipPath := filepath.Join(tmpDir, "parallel_enc.zip")
+	f, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatalf("failed to create zip file: %v", err)
+	}
+
+	// Use WithArchiverConcurrency(4) to ensure multiple goroutines process files in parallel
+	a, err := NewArchiver(f, srcDir, WithArchiverConcurrency(4), WithArchiverPassword(password))
+	if err != nil {
+		t.Fatalf("failed to init archiver: %v", err)
+	}
+
+	filesMap := make(map[string]os.FileInfo)
+	err = filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if path != srcDir {
+			filesMap[path] = info
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk failed: %v", err)
+	}
+
+	if err := a.Archive(context.Background(), filesMap); err != nil {
+		t.Fatalf("archive failed: %v", err)
+	}
+	a.Close()
+	f.Close()
+
+	// Extract and verify using multiple goroutines as well
+	os.MkdirAll(dstDir, 0755)
+	e, err := NewExtractor(zipPath, dstDir, WithExtractorPassword(password), WithExtractorConcurrency(4))
+	if err != nil {
+		t.Fatalf("failed to init extractor: %v", err)
+	}
+
+	if err := e.Extract(context.Background()); err != nil {
+		t.Fatalf("extract failed: %v", err)
+	}
+	e.Close()
+
+	// Verify the extracted files contents
+	for path, expectedContent := range filesToCreate {
+		fullPath := filepath.Join(dstDir, path)
+		content, err := os.ReadFile(fullPath)
+		if err != nil {
+			t.Errorf("extracted file %s is missing: %v", path, err)
+			continue
+		}
+		if !bytes.Equal(content, []byte(expectedContent)) {
+			t.Errorf("extracted file %s content mismatch. Expected %q, got %q", path, expectedContent, string(content))
+		}
+	}
+}

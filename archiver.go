@@ -853,7 +853,22 @@ func (a *Archiver) compressFile(ctx context.Context, r io.ReadSeeker, fi os.File
 		return a.compressFileSimple(ctx, r, fi, hdr)
 	}
 
-	fw, err := comp(tmp)
+	var sink io.Writer = tmp
+	var aesW io.WriteCloser
+	if hdr.Password != "" {
+		strength := hdr.AESStrength
+		if strength == 0 {
+			strength = 3
+		}
+		var err error
+		aesW, err = newWinZipAesWriter(tmp, hdr.Password, strength)
+		if err != nil {
+			return err
+		}
+		sink = aesW
+	}
+
+	fw, err := comp(sink)
 	if err != nil {
 		return err
 	}
@@ -865,6 +880,9 @@ func (a *Archiver) compressFile(ctx context.Context, r io.ReadSeeker, fi os.File
 	for {
 		if err := ctx.Err(); err != nil {
 			dclose(fw, &err)
+			if aesW != nil {
+				dclose(aesW, &err)
+			}
 			return err
 		}
 		n, errRead := r.Read(copyBuf)
@@ -888,6 +906,9 @@ func (a *Archiver) compressFile(ctx context.Context, r io.ReadSeeker, fi os.File
 		}
 	}
 	dclose(fw, &err)
+	if aesW != nil {
+		dclose(aesW, &err)
+	}
 	if err != nil {
 		return err
 	}
@@ -902,7 +923,11 @@ func (a *Archiver) compressFile(ctx context.Context, r io.ReadSeeker, fi os.File
 		atomic.AddInt64(&a.written, -int64(hdr.UncompressedSize64))
 		return a.compressFileSimple(ctx, r, fi, hdr)
 	}
-	hdr.CRC32 = tmp.Checksum()
+	if hdr.Password != "" {
+		hdr.CRC32 = 0
+	} else {
+		hdr.CRC32 = tmp.Checksum()
+	}
 
 	a.m.Lock()
 	defer a.m.Unlock()
