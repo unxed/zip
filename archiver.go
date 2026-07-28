@@ -416,7 +416,7 @@ func (a *Archiver) Archive(ctx context.Context, files map[string]os.FileInfo) (e
 				streams, _ := getAlternativeDataStreamsFunc(name)
 				for _, stream := range streams {
 					streamPath := name + stream
-					if streamFi, serr := os.Stat(streamPath); serr == nil {
+					if streamFi, serr := os.Stat(fixOSPath(streamPath)); serr == nil {
 						virtualFiles = append(virtualFiles, virtualFile{
 							path: streamPath,
 							info: streamFi,
@@ -752,7 +752,7 @@ func (a *Archiver) createSymlink(path string, fi os.FileInfo, hdr *FileHeader) e
 	a.m.Lock()
 	defer a.m.Unlock()
 
-	link, err := os.Readlink(path)
+	link, err := os.Readlink(fixOSPath(path))
 	if err != nil {
 		return err
 	}
@@ -774,7 +774,7 @@ func (a *Archiver) createSymlink(path string, fi os.FileInfo, hdr *FileHeader) e
 }
 
 func (a *Archiver) createFile(ctx context.Context, path string, fi os.FileInfo, hdr *FileHeader, tmp *filepool.File) error {
-	f, err := os.Open(path)
+	f, err := os.Open(fixOSPath(path))
 	if err != nil {
 		return err
 	}

@@ -507,17 +507,17 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 
 				// Overwrite control policies
 				if file.Mode()&os.ModeDir == 0 && file.Mode()&os.ModeSymlink == 0 && file.Linkname == "" {
-					if e.options.unlinkFirst {
-						os.RemoveAll(path) // Safer than os.Remove for preventing TOCTOU directory overwrites
+				if e.options.unlinkFirst {
+					os.RemoveAll(fixOSPath(path)) // Safer than os.Remove for preventing TOCTOU directory overwrites
+				}
+				if e.options.keepOldFiles {
+					if _, err := os.Stat(fixOSPath(path)); err == nil {
+						continue // Skip extracting, file already exists
 					}
-					if e.options.keepOldFiles {
-						if _, err := os.Stat(path); err == nil {
-							continue // Skip extracting, file already exists
-						}
-					}
-					if e.options.keepNewerFiles {
-						if fi, err := os.Stat(path); err == nil {
-							if fi.ModTime().After(file.Modified) {
+				}
+				if e.options.keepNewerFiles {
+					if fi, err := os.Stat(fixOSPath(path)); err == nil {
+						if fi.ModTime().After(file.Modified) {
 								continue // Skip extracting, disk file is newer
 							}
 						}
@@ -783,20 +783,20 @@ func (e *Extractor) extractSolidStream(r io.Reader, ctx context.Context) error {
 		}
 
 		if isDir {
-			os.MkdirAll(path, 0755)
+			os.MkdirAll(fixOSPath(path), 0755)
 			e.updateFileMetadata(path, &File{FileHeader: *fh})
 		} else {
 			if e.options.unlinkFirst {
-				os.Remove(path)
+				os.Remove(fixOSPath(path))
 			}
-			os.MkdirAll(filepath.Dir(path), 0755)
+			os.MkdirAll(fixOSPath(filepath.Dir(path)), 0755)
 
 			writePath := path
 			if e.options.safeWrites {
 				writePath = path + ".tmp"
 			}
 
-			f, err := os.OpenFile(writePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+			f, err := os.OpenFile(fixOSPath(writePath), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 			if err != nil {
 				return err
 			}
@@ -894,7 +894,7 @@ func skipBytes(r io.Reader, n int64, flags uint16) error {
 }
 
 func (e *Extractor) createDirectory(path string, file *File) error {
-	err := os.Mkdir(path, 0777)
+	err := os.Mkdir(fixOSPath(path), 0777)
 	if os.IsExist(err) {
 		err = nil
 	}
@@ -903,7 +903,7 @@ func (e *Extractor) createDirectory(path string, file *File) error {
 }
 
 func (e *Extractor) createLink(path string, file *File) error {
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(fixOSPath(path)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 
@@ -934,14 +934,14 @@ func (e *Extractor) createLink(path string, file *File) error {
 
 		if runtime.GOOS == "windows" {
 			isDir := false
-			if fi, err := os.Stat(filepath.Join(filepath.Dir(path), target)); err == nil {
+			if fi, err := os.Stat(fixOSPath(filepath.Join(filepath.Dir(path), target))); err == nil {
 				isDir = fi.IsDir()
 			}
 			if err := createWindowsSymlink(target, path, isDir); err != nil {
 				return err
 			}
 		} else {
-			if err := os.Symlink(target, path); err != nil {
+			if err := os.Symlink(target, fixOSPath(path)); err != nil {
 				return err
 			}
 		}
@@ -951,7 +951,7 @@ func (e *Extractor) createLink(path string, file *File) error {
 			linkname = string(encodeMappedString(linkname))
 		}
 		targetPath := filepath.Join(e.chroot, linkname)
-		if err := os.Link(targetPath, path); err != nil {
+		if err := os.Link(fixOSPath(targetPath), fixOSPath(path)); err != nil {
 			return err
 		}
 	}
@@ -976,7 +976,7 @@ func (e *Extractor) createFile(ctx context.Context, path string, file *File) (er
 		}
 	}
 
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(fixOSPath(path)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 
@@ -991,7 +991,7 @@ func (e *Extractor) createFile(ctx context.Context, path string, file *File) (er
 		writePath = path + ".tmp"
 	}
 
-	f, err := os.OpenFile(writePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
+	f, err := os.OpenFile(fixOSPath(writePath), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
 	if err != nil {
 		return err
 	}
@@ -1169,7 +1169,7 @@ func (e *Extractor) linksToDirs(targetPath string) error {
 	current := e.chroot
 	for i := 0; i < len(parts)-1; i++ {
 		current = filepath.Join(current, parts[i])
-		fi, err := os.Lstat(current)
+		fi, err := os.Lstat(fixOSPath(current))
 		if err != nil {
 			if os.IsNotExist(err) {
 				break
@@ -1177,7 +1177,7 @@ func (e *Extractor) linksToDirs(targetPath string) error {
 			return err
 		}
 		if fi.Mode()&os.ModeSymlink != 0 {
-			if err := os.Remove(current); err != nil {
+			if err := os.Remove(fixOSPath(current)); err != nil {
 				return err
 			}
 		}
@@ -1195,7 +1195,7 @@ func (e *Extractor) synthesizeParentDirs(targetPath string) error {
 	}
 
 	// Fast path: ensure parent directory chain exists using standard OS tools
-	err := os.MkdirAll(dir, 0755)
+	err := os.MkdirAll(fixOSPath(dir), 0755)
 	if err == nil {
 		e.dirCache.Store(dir, struct{}{})
 		return nil
@@ -1216,10 +1216,10 @@ func (e *Extractor) synthesizeParentDirs(targetPath string) error {
 
 	for i := 0; i < len(parts)-1; i++ {
 		current = filepath.Join(current, parts[i])
-		fi, errStat := os.Lstat(current)
+		fi, errStat := os.Lstat(fixOSPath(current))
 		if errStat != nil {
 			if os.IsNotExist(errStat) {
-				if errMk := os.Mkdir(current, 0755); errMk != nil && !os.IsExist(errMk) {
+				if errMk := os.Mkdir(fixOSPath(current), 0755); errMk != nil && !os.IsExist(errMk) {
 					return errMk
 				}
 			} else {
@@ -1227,8 +1227,8 @@ func (e *Extractor) synthesizeParentDirs(targetPath string) error {
 			}
 		} else if !fi.IsDir() {
 			// Resolve conflict: remove blocking file and create directory
-			if errRm := os.Remove(current); errRm == nil {
-				if errMk := os.Mkdir(current, 0755); errMk != nil {
+			if errRm := os.Remove(fixOSPath(current)); errRm == nil {
+				if errMk := os.Mkdir(fixOSPath(current), 0755); errMk != nil {
 					return errMk
 				}
 			} else {

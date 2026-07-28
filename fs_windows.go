@@ -18,14 +18,14 @@ func lchmod(name string, mode os.FileMode) error {
 	if mode&os.ModeSymlink != 0 {
 		return nil
 	}
-	return os.Chmod(name, mode)
+	return os.Chmod(fixOSPath(name), mode)
 }
 
 func lchtimes(name string, mode os.FileMode, atime, mtime time.Time) error {
 	if mode&os.ModeSymlink != 0 {
 		return nil
 	}
-	return os.Chtimes(name, atime, mtime)
+	return os.Chtimes(fixOSPath(name), atime, mtime)
 }
 
 // createWindowsSymlink fallback creates a Junction for directories or tries hardlink/symlink
@@ -59,12 +59,12 @@ func createWindowsSymlink(target, link string, isDir bool) error {
 }
 
 func copyFileContents(src, dst string) error {
-	in, err := os.Open(src)
+	in, err := os.Open(fixOSPath(src))
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	out, err := os.Create(dst)
+	out, err := os.Create(fixOSPath(dst))
 	if err != nil {
 		return err
 	}
@@ -96,7 +96,7 @@ type win32FindStreamData struct {
 }
 
 func getFileSecurity(path string) ([]byte, error) {
-	pathPtr, err := syscall.UTF16PtrFromString(path)
+	pathPtr, err := syscall.UTF16PtrFromString(fixOSPath(path))
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +135,7 @@ func applyNtfsAcl(path string, acl []byte) error {
 	if len(acl) == 0 {
 		return nil
 	}
-	pathPtr, err := syscall.UTF16PtrFromString(path)
+	pathPtr, err := syscall.UTF16PtrFromString(fixOSPath(path))
 	if err != nil {
 		return err
 	}
@@ -152,7 +152,7 @@ func applyNtfsAcl(path string, acl []byte) error {
 }
 
 func getAlternativeDataStreams(path string) ([]string, error) {
-	pathPtr, err := syscall.UTF16PtrFromString(path)
+	pathPtr, err := syscall.UTF16PtrFromString(fixOSPath(path))
 	if err != nil {
 		return nil, err
 	}
