@@ -1384,6 +1384,18 @@ func (e *Extractor) createFile(ctx context.Context, path string, file *File, bud
 	if err == nil {
 		err = trimToWritten(f)
 	}
+	// The mode goes on through the handle that wrote the bytes, while that
+	// handle still names the file they went into. Put on by path afterwards
+	// it lands on whatever stands at that name by then, and what stands
+	// there need not be this file: an entry named as another entry's parent
+	// directory has the extraction replace it with a directory, and a
+	// directory wearing a file's mode has lost the search bit it needs to be
+	// entered at all. Only the mode is moved here -- times and extended
+	// attributes stay by path, where landing on the wrong object is untidy
+	// rather than a directory nobody can go into.
+	if err == nil {
+		err = f.Chmod(file.Mode().Perm())
+	}
 	dclose(f, &err)
 	closed = true
 
@@ -1452,8 +1464,16 @@ func (e *Extractor) updateFileMetadata(path string, file *File) error {
 		}
 	}
 
-	if err := lchmod(path, mode); err != nil {
-		return err
+	// A regular file has its mode already: createFile put it on through the
+	// handle it wrote the bytes with, which is the only way to be sure it
+	// went to that file rather than to whatever now answers to its name.
+	// What is left here is what has no handle of its own to be reached
+	// through: directories, in the pass that runs once the tree is final,
+	// and the links and device nodes another call made.
+	if !mode.IsRegular() {
+		if err := lchmod(path, mode); err != nil {
+			return err
+		}
 	}
 
 	// Access control lists and extended attributes are best effort

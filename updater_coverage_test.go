@@ -22,6 +22,14 @@ type UpdaterCovFile struct {
 
 	// readErr, once set, is what every Read reports.
 	readErr error
+	// readFailOver and readFailUnder, when positive, hold readErr to reads
+	// of more, and of fewer, bytes than they name. The updater reads a
+	// whole buffer at a time to move the archive down, a local header at a
+	// time to work out what an entry occupies, and four bytes to see
+	// whether a data descriptor carries its signature, so a threshold at
+	// the length of a local header tells the three apart.
+	readFailOver  int
+	readFailUnder int
 	// writeErr, once set, is what every Write reports.
 	writeErr error
 	// shortRead, when positive, caps how much a single Read hands back.
@@ -41,7 +49,8 @@ type UpdaterCovFile struct {
 }
 
 func (f *UpdaterCovFile) Read(p []byte) (int, error) {
-	if f.readErr != nil {
+	if f.readErr != nil && (f.readFailOver == 0 || len(p) > f.readFailOver) &&
+		(f.readFailUnder == 0 || len(p) < f.readFailUnder) {
 		return 0, f.readErr
 	}
 	if f.off >= int64(len(f.data)) {
@@ -445,6 +454,7 @@ func TestUpdaterCovReportsAFailedShiftWhenOverwriting(t *testing.T) {
 	t.Run("read", func(t *testing.T) {
 		u, mem := UpdaterCovOpen(t, raw)
 		mem.readErr = errUpdaterCovFail
+		mem.readFailOver = fileHeaderLen
 		_, err := u.Append("first.txt", APPEND_MODE_OVERWRITE)
 		if !errors.Is(err, errUpdaterCovFail) {
 			t.Fatalf("appending gave %v, want the failure of the handle", err)
@@ -520,6 +530,7 @@ func TestUpdaterCovShiftsMoreThanOneBufferOfData(t *testing.T) {
 	t.Run("read", func(t *testing.T) {
 		u, mem := UpdaterCovOpen(t, raw)
 		mem.readErr = errUpdaterCovFail
+		mem.readFailOver = fileHeaderLen
 		_, err := u.Append("first.txt", APPEND_MODE_OVERWRITE)
 		if !errors.Is(err, errUpdaterCovFail) {
 			t.Fatalf("appending gave %v, want the failure of the handle", err)
@@ -1026,29 +1037,89 @@ func TestUpdaterCovRemoveLeavesNothingOfTheEntry(t *testing.T) {
 	}
 }
 
+// TestUpdaterCovRemoveCannotReadALocalHeader: what an entry occupies is read
+// from its own local header, and a handle that will not hand that over leaves
+// the extent unknown, so nothing may be cut.
+func TestUpdaterCovRemoveCannotReadALocalHeader(t *testing.T) {
+	raw := UpdaterCovArchive(t, UpdaterCovEntry{Name: "gone.txt", Data: []byte("content")})
+	u, mem := UpdaterCovOpen(t, raw)
+
+	mem.readErr = errUpdaterCovFail
+	if _, err := u.RemoveFile(0); !errors.Is(err, errUpdaterCovFail) {
+		t.Fatalf("removing gave %v, want the failure of the handle", err)
+	}
+}
+
+// TestUpdaterCovRemoveCannotReadALocalHeaderToTheEnd: a handle that stops in
+// the middle of a header the archive said was there is describing a truncated
+// archive rather than a fault of its own, so the removal reports a malformed
+// archive with what the read gave out kept behind it.
+func TestUpdaterCovRemoveCannotReadALocalHeaderToTheEnd(t *testing.T) {
+	raw := UpdaterCovArchive(t, UpdaterCovEntry{Name: "gone.txt", Data: []byte("content")})
+	u, mem := UpdaterCovOpen(t, raw)
+
+	mem.readErr = io.ErrUnexpectedEOF
+	_, err := u.RemoveFile(0)
+	if !errors.Is(err, ErrFormat) {
+		t.Fatalf("removing gave %v, want a malformed archive", err)
+	}
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Errorf("the refusal drops what the read reported: %v", err)
+	}
+}
+
+// TestUpdaterCovRemoveCannotReadADataDescriptor: how long an entry's data
+// descriptor is depends on the four bytes at the end of its data, and a handle
+// that will not hand those over leaves the extent unknown, so nothing may be
+// cut.
+func TestUpdaterCovRemoveCannotReadADataDescriptor(t *testing.T) {
+	raw := UpdaterCovArchive(t, UpdaterCovEntry{Name: "gone.txt", Data: []byte("content")})
+	u, mem := UpdaterCovOpen(t, raw)
+
+	// The local header is read whole and the descriptor is looked for four
+	// bytes at a time, so a threshold at the length of a header lets the
+	// first through and stops the second.
+	mem.readErr = errUpdaterCovFail
+	mem.readFailUnder = fileHeaderLen
+	if _, err := u.RemoveFile(0); !errors.Is(err, errUpdaterCovFail) {
+		t.Fatalf("removing gave %v, want the failure of the handle", err)
+	}
+}
+
 // TestUpdaterCovRemoveCannotOverwriteWhatItFreed: on a handle that cannot be
 // shortened, the bytes a removal frees are written over with zeros, and a
 // handle that will not take that write leaves the entry where it was -- so the
 // removal has to fail rather than report a file it did not unmake.
 func TestUpdaterCovRemoveCannotOverwriteWhatItFreed(t *testing.T) {
 	raw := UpdaterCovArchive(t,
+		UpdaterCovEntry{Name: "gone.txt", Data: []byte("the entry to remove")},
 		UpdaterCovEntry{Name: "keep.txt", Data: []byte("kept")},
-		UpdaterCovEntry{Name: "last.txt", Data: []byte("the entry to remove")},
 	)
+
+	// The zero fill begins where the data ends once the entry has been cut
+	// out, which is the offset the removal itself answers with and is no
+	// entry's own: working out an extent reads at the entries and at their
+	// tails, and a seek aimed here is the zero fill's and nothing else's.
+	dry := &UpdaterCovFile{data: append([]byte(nil), raw...)}
+	du, err := NewUpdater(&UpdaterCovPlainFile{file: dry})
+	if err != nil {
+		t.Fatalf("opening the updater: %v", err)
+	}
+	freed, err := du.RemoveFile(0)
+	if err != nil {
+		t.Fatalf("the removal this measures: %v", err)
+	}
+
 	mem := &UpdaterCovFile{data: append([]byte(nil), raw...)}
 	u, err := NewUpdater(&UpdaterCovPlainFile{file: mem})
 	if err != nil {
 		t.Fatalf("opening the updater: %v", err)
 	}
-
-	// Removing the last entry shifts nothing, so the only seek to the end
-	// of the data that follows is the one the zero fill makes.
-	// #nosec G115 -- the fixture is a few hundred bytes
-	mem.seekStartAt = int64(u.dir[len(u.dir)-1].offset)
+	mem.seekStartAt = freed
 	mem.seekStartErr = errUpdaterCovFail
 
-	if _, err := u.RemoveFile(len(u.dir) - 1); !errors.Is(err, errUpdaterCovFail) {
-		t.Fatalf("removing the last entry gave %v, want the failure of the handle", err)
+	if _, err := u.RemoveFile(0); !errors.Is(err, errUpdaterCovFail) {
+		t.Fatalf("removing gave %v, want the failure of the handle", err)
 	}
 }
 
