@@ -498,36 +498,50 @@ func (f *File) OpenRaw() (io.Reader, error) {
 	return r, nil
 }
 
-func (f *File) findHiddenIndex() (int, []byte, error) {
-	bodyOffset, err := f.findBodyOffset()
-	if err != nil {
-		return 0, nil, err
-	}
+// readFullAt fills p from offset. io.ReaderAt is obliged to do that itself,
+// but the updater's handle over an io.ReadWriteSeeker is one read of what is
+// underneath and may answer short, so the fill is spelled out for whichever
+// kind of reader is passed. A buffer that cannot be filled reports what the
+// reader said, io.ErrUnexpectedEOF for an archive that stops in the middle of
+// a header included.
+func readFullAt(r io.ReaderAt, p []byte, offset int64) error {
+	_, err := io.ReadFull(io.NewSectionReader(r, offset, int64(len(p))), p)
+	return err
+}
 
-	// #nosec G115 -- readDirectoryHeader and salvage both refuse an entry whose CompressedSize64 is above MaxInt64
-	endOffset := f.headerOffset + bodyOffset + int64(f.CompressedSize64)
-	if f.hasDataDescriptor() {
-		if f.zip64 {
-			endOffset += dataDescriptor64Len
-		} else {
-			endOffset += dataDescriptorLen
-		}
-	}
+// hiddenIndexSpan says where an entry's seek index lies and which of the two
+// kinds it is.
+type hiddenIndexSpan struct {
+	kind       int   // 1 for a SOZip index, 2 for a gzip one
+	dataOffset int64 // where the index's payload begins
+	dataSize   int64 // how long that payload is
+}
 
-	var sigBuf [4]byte
-	if _, err := f.zipr.ReadAt(sigBuf[:], endOffset); err != nil {
-		return 0, nil, nil
-	}
-	if binary.LittleEndian.Uint32(sigBuf[:]) != fileHeaderSignature {
-		return 0, nil, nil
-	}
+// findHiddenIndexAt recognises the seek index belonging to the entry named
+// owner, when one begins at offset. The index is a local entry of this
+// package's own making -- stored, no data descriptor, named after the entry it
+// belongs to and named by no central directory record -- which writeHiddenIndex
+// puts directly behind the entry's data.
+//
+// It answers false and no error whenever what is there is not that index:
+// there is no local header, or its method or its flags do not fit, or its name
+// belongs to something else. A stray local entry another tool left behind
+// reads exactly the same way from outside, and the point of the name check is
+// that it is told apart from the index by nothing weaker.
+func findHiddenIndexAt(r io.ReaderAt, offset int64, owner string) (hiddenIndexSpan, bool, error) {
+	var none hiddenIndexSpan
 
-	headerBuf := make([]byte, fileHeaderLen)
-	if _, err := f.zipr.ReadAt(headerBuf, endOffset); err != nil {
-		return 0, nil, nil
+	var headerBuf [fileHeaderLen]byte
+	if err := readFullAt(r, headerBuf[:], offset); err != nil {
+		// Most entries carry no index at all, and behind the last one
+		// lies the central directory: nothing to read here is the
+		// ordinary answer rather than a fault.
+		return none, false, nil
 	}
-
-	b := readBuf(headerBuf[4:])
+	b := readBuf(headerBuf[:])
+	if sig := b.uint32(); sig != fileHeaderSignature {
+		return none, false, nil
+	}
 	_ = b.uint16() // ReaderVersion / Version needed to extract (2 bytes)
 	flags := b.uint16()
 	method := b.uint16()
@@ -540,27 +554,27 @@ func (f *File) findHiddenIndex() (int, []byte, error) {
 	extraLen := int(b.uint16())
 
 	if method != Store {
-		return 0, nil, nil
+		return none, false, nil
 	}
 
 	nameBuf := make([]byte, filenameLen)
-	if _, err := f.zipr.ReadAt(nameBuf, endOffset+fileHeaderLen); err != nil {
-		return 0, nil, err
+	if err := readFullAt(r, nameBuf, offset+fileHeaderLen); err != nil {
+		return none, false, err
 	}
-	hiddenName := string(nameBuf)
 	// Masked hidden name if CDE is used
 	if flags&0x2000 != 0 {
-		return 0, nil, nil
+		return none, false, nil
 	}
 
-	dir, name := path.Split(f.Name)
-	if hiddenName != dir+"."+name+".sozip.idx" && hiddenName != dir+"."+name+".gzidx" {
-		return 0, nil, nil
-	}
-
-	idxType := 1
-	if strings.HasSuffix(hiddenName, ".gzidx") {
-		idxType = 2
+	dir, name := path.Split(owner)
+	var kind int
+	switch string(nameBuf) {
+	case dir + "." + name + ".sozip.idx":
+		kind = 1
+	case dir + "." + name + ".gzidx":
+		kind = 2
+	default:
+		return none, false, nil
 	}
 
 	compSize64 := uint64(compSize)
@@ -570,8 +584,8 @@ func (f *File) findHiddenIndex() (int, []byte, error) {
 		// the 32-bit field is saturated. A short or failed read used to
 		// leave the buffer holding zeros, and the size was then parsed
 		// out of them as if the archive had said so.
-		if _, err := f.zipr.ReadAt(extraBuf, endOffset+fileHeaderLen+int64(filenameLen)); err != nil {
-			return 0, nil, err
+		if err := readFullAt(r, extraBuf, offset+fileHeaderLen+int64(filenameLen)); err != nil {
+			return none, false, err
 		}
 		for eb := readBuf(extraBuf); len(eb) >= 4; {
 			tag := eb.uint16()
@@ -588,19 +602,77 @@ func (f *File) findHiddenIndex() (int, []byte, error) {
 	// The size of the payload is the hidden entry's own to declare -- a
 	// uint32, or the whole range of a uint64 through its zip64 extra -- and
 	// the buffer for it used to be made from that declaration before a byte
-	// of the payload had been read. Reading through a section reader bounds
-	// the allocation by the bytes the archive actually holds; anything the
-	// index is then short of is caught where the payload is parsed.
+	// of the payload had been read.
 	if compSize64 > math.MaxInt64 {
-		return 0, nil, fmt.Errorf("zip: seek index declares %d bytes: %w", compSize64, ErrFormat)
+		return none, false, fmt.Errorf("zip: seek index declares %d bytes: %w", compSize64, ErrFormat)
 	}
-	dataOffset := endOffset + fileHeaderLen + int64(filenameLen) + int64(extraLen)
-	payload, err := io.ReadAll(io.NewSectionReader(f.zipr, dataOffset, int64(compSize64)))
+	return hiddenIndexSpan{
+		kind:       kind,
+		dataOffset: offset + fileHeaderLen + int64(filenameLen) + int64(extraLen),
+		// #nosec G115 -- the check just above holds it to MaxInt64
+		dataSize: int64(compSize64),
+	}, true, nil
+}
+
+// hiddenIndexOffset is where an entry's seek index would begin: behind its
+// data and behind the data descriptor, when it has one.
+func (f *File) hiddenIndexOffset() (int64, error) {
+	bodyOffset, err := f.findBodyOffset()
+	if err != nil {
+		return 0, err
+	}
+	// #nosec G115 -- readDirectoryHeader and salvage both refuse an entry whose CompressedSize64 is above MaxInt64
+	endOffset := f.headerOffset + bodyOffset + int64(f.CompressedSize64)
+	if f.hasDataDescriptor() {
+		if f.zip64 {
+			endOffset += dataDescriptor64Len
+		} else {
+			endOffset += dataDescriptorLen
+		}
+	}
+	return endOffset, nil
+}
+
+// claimedOffset says whether some entry of the archive has its local header at
+// offset. A seek index is a local entry the central directory does not list,
+// so an offset the directory does claim is another entry and not an index --
+// an archive may perfectly well hold a listed entry named ".a.txt.sozip.idx"
+// sitting behind "a.txt", and reading it as a's index would fail an archive
+// that is entirely valid.
+//
+// The archive asked is the one this entry was read out of, which every entry
+// that reaches here has: the only entries this package builds without a reader
+// behind them are the updater's, and the updater walks the recognition itself
+// and makes the same check against the directory it is assembling.
+func (f *File) claimedOffset(offset int64) bool {
+	for _, other := range f.zip.File {
+		if other.headerOffset == offset {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *File) findHiddenIndex() (int, []byte, error) {
+	endOffset, err := f.hiddenIndexOffset()
 	if err != nil {
 		return 0, nil, err
 	}
-
-	return idxType, payload, nil
+	if f.claimedOffset(endOffset) {
+		return 0, nil, nil
+	}
+	idx, ok, err := findHiddenIndexAt(f.zipr, endOffset, f.Name)
+	if err != nil || !ok {
+		return 0, nil, err
+	}
+	// Reading through a section reader bounds the allocation by the bytes
+	// the archive actually holds; anything the index is then short of is
+	// caught where the payload is parsed.
+	payload, err := io.ReadAll(io.NewSectionReader(f.zipr, idx.dataOffset, idx.dataSize))
+	if err != nil {
+		return 0, nil, err
+	}
+	return idx.kind, payload, nil
 }
 
 // OpenSeekable returns a ReadSeeker for the file content.
@@ -1265,6 +1337,17 @@ parseExtras:
 		}
 	}
 
+	// The three sentinels are not refused alike, and deliberately so. An
+	// archive written before zip64 existed can hold an uncompressed size of
+	// exactly 2^32-1 as a real size, with no record behind it because the
+	// writer had no records to write; refusing it would turn away entries
+	// that are merely large. A compressed size or a local header offset of
+	// 2^32-1 could only be real in an archive of at least that many bytes,
+	// which an archive carrying no zip64 record is not, so those two are
+	// refused. What is left is a size the archive claims and has not
+	// substantiated, which is what every declared size is: the extraction
+	// weighs it against its limits before a byte is written, and nothing
+	// reserves space on the strength of it alone.
 	_ = needUSize
 
 	if needCSize || needHeaderOffset {

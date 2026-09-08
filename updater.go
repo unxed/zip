@@ -2,6 +2,7 @@ package zip
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -212,6 +213,21 @@ func (u *Updater) init(size int64) error {
 			FileHeader: &f.FileHeader,
 			// #nosec G115 -- the check above holds headerOffset to 0 <= offset <= dirOffset
 			offset: uint64(f.headerOffset),
+			zip64:  f.zip64,
+		}
+		// Whatever this entry's extra field holds is written back out
+		// verbatim, and behind it goes the zip64 record the directory
+		// needs. A reader walks the area from the front and stops at
+		// the first record it cannot walk past, so a record put behind
+		// an area that does not walk is a record no reader reaches --
+		// and the sentinels in the size fields that point at it then
+		// point at nothing. An entry that needs no record of ours is
+		// left alone: it comes back out exactly as it went in, and it
+		// reads afterwards exactly as it read before.
+		if h.needsZip64() {
+			if err := validateExtra(h.Extra); err != nil {
+				return fmt.Errorf("zip: entry %q needs a zip64 record and its extra field cannot be walked to the end: %w", f.Name, err)
+			}
 		}
 		u.dir = append(u.dir, h)
 	}
@@ -396,16 +412,163 @@ func (u *Updater) AppendHeader(fh *FileHeader, mode AppendMode) (io.Writer, erro
 	return ow, nil
 }
 
+// entryExtent answers the offset one past the last byte the entry occupies:
+// its local header, whose name and extra field are read from the header itself
+// because the central directory's may differ from it, its compressed data, the
+// data descriptor behind them when the entry has one, and its seek index when
+// it has one of those.
+//
+// A descriptor is allowed to carry the 0x08074b50 signature or to begin
+// straight away with the CRC, and readDataDescriptor tolerates both, so the
+// four bytes at the end of the data decide which of the two lengths this is. A
+// CRC that happens to equal the signature would make the answer four bytes too
+// long, and four bytes too long can only reach into what lies between two
+// entries: the caller weighs every extent against its neighbour before cutting
+// anything, and a reach into a neighbour is refused rather than cut.
+//
+// Every step is held inside the archive's data as it is taken. What is over
+// the line is the central directory, which nothing here may reach: an entry
+// whose numbers say otherwise is describing bytes it does not own.
+func (u *Updater) entryExtent(h *header) (int64, error) {
+	// #nosec G115 -- init holds every entry offset to 0 <= offset <= dirOffset
+	start := int64(h.offset)
+	var lh [fileHeaderLen]byte
+	if err := readFullAt(u.rw, lh[:], start); err != nil {
+		return 0, fmt.Errorf("zip: entry %q has no readable local header at %d: %w", h.Name, start, entryReadError(err))
+	}
+	if binary.LittleEndian.Uint32(lh[0:4]) != fileHeaderSignature {
+		return 0, fmt.Errorf("zip: entry %q has no local header at %d: %w", h.Name, start, ErrFormat)
+	}
+	// A name and an extra field are two bytes of length each, so a header
+	// is at most a hundred and thirty odd kilobytes and start is inside the
+	// archive: neither the sum nor the difference below can overflow, and a
+	// difference that has gone negative is a header already over the line,
+	// which the comparison then refuses for any size at all.
+	body := int64(fileHeaderLen) +
+		int64(binary.LittleEndian.Uint16(lh[26:28])) +
+		int64(binary.LittleEndian.Uint16(lh[28:30]))
+	// #nosec G115 -- readDirectoryHeader refuses an entry whose compressed size is above MaxInt64, so this is exact
+	if int64(h.CompressedSize64) > u.dirOffset-start-body {
+		return 0, fmt.Errorf("zip: entry %q at %d has a %d byte header and %d compressed bytes, and %d remain before the central directory: %w",
+			h.Name, start, body, h.CompressedSize64, u.dirOffset-start, ErrFormat)
+	}
+	// #nosec G115 -- as above
+	end := start + body + int64(h.CompressedSize64)
+
+	if h.hasDataDescriptor() {
+		ddLen := int64(dataDescriptorLen)
+		if h.zip64 {
+			ddLen = dataDescriptor64Len
+		}
+		var sig [4]byte
+		if err := readFullAt(u.rw, sig[:], end); err != nil {
+			return 0, fmt.Errorf("zip: entry %q has no readable data descriptor at %d: %w", h.Name, end, entryReadError(err))
+		}
+		if binary.LittleEndian.Uint32(sig[:]) != dataDescriptorSignature {
+			ddLen -= 4
+		}
+		if ddLen > u.dirOffset-end {
+			return 0, fmt.Errorf("zip: entry %q has a data descriptor at %d reaching past the central directory at %d: %w",
+				h.Name, end, u.dirOffset, ErrFormat)
+		}
+		end += ddLen
+	}
+
+	// The entry's own seek index is part of the entry. This package writes
+	// it as a local entry directly behind the data descriptor, no central
+	// record names it, and findHiddenIndex looks for it exactly there --
+	// so a removal that left it behind would leave the removed entry's
+	// chunk offsets in an archive that says the entry is gone. What is
+	// recognised is this entry's index and nothing weaker: a stray local
+	// entry another tool left between two entries reads the same way from
+	// outside, and bytes this package did not write are not its to cut.
+	//
+	// An offset the directory itself claims is the next entry rather than
+	// an index, whatever it is named: an archive may hold a listed entry
+	// called ".a.txt.sozip.idx" behind "a.txt", and taking that for a's
+	// index would swallow an entry the caller is keeping.
+	if claimed(u.dir, end) {
+		return end, nil
+	}
+	idx, ok, err := findHiddenIndexAt(u.rw, end, h.Name)
+	if err != nil {
+		return 0, fmt.Errorf("zip: entry %q has an unreadable seek index at %d: %w", h.Name, end, entryReadError(err))
+	}
+	if !ok {
+		return end, nil
+	}
+	if idx.dataSize > u.dirOffset-idx.dataOffset {
+		return 0, fmt.Errorf("zip: entry %q has a seek index at %d reaching past the central directory at %d: %w",
+			h.Name, end, u.dirOffset, ErrFormat)
+	}
+	return idx.dataOffset + idx.dataSize, nil
+}
+
+// claimed says whether the directory gives some entry's local header as
+// beginning at offset. The directory is sorted by offset, which is what lets
+// this be asked once per entry without the asking costing more than the walk
+// it is part of.
+func claimed(dir []*header, offset int64) bool {
+	// #nosec G115 -- init holds every entry offset to 0 <= offset <= dirOffset
+	i := sort.Search(len(dir), func(i int) bool { return int64(dir[i].offset) >= offset })
+	// #nosec G115 -- as above
+	return i < len(dir) && int64(dir[i].offset) == offset
+}
+
+// entryReadError says how a failed read of the archive's own bytes is
+// reported. An archive that stops in the middle of a header it said was there
+// is a malformed one, so that is what the caller is told, with what the read
+// gave out kept behind it; anything else is the handle failing rather than the
+// archive, and belongs to the caller unchanged.
+func entryReadError(err error) error {
+	if err == io.EOF || err == io.ErrUnexpectedEOF {
+		return fmt.Errorf("%w: %w", ErrFormat, err)
+	}
+	return err
+}
+
+// extents answers where every entry ends, and refuses an archive in which the
+// entries run into one another. The directory is sorted by offset, so entries
+// that do not reach their successor do not reach anything beyond it either,
+// and one pass over the neighbours settles the whole file.
+//
+// The invariant is what makes a cut safe, and it is the whole file's rather
+// than the removed entry's: the shift that follows a removal moves everything
+// from the entry's end down to the central directory, so an entry anywhere
+// before it whose data ran into its neighbour is written over just as surely.
+func (u *Updater) extents() ([]int64, error) {
+	ends := make([]int64, len(u.dir))
+	for i, h := range u.dir {
+		end, err := u.entryExtent(h)
+		if err != nil {
+			return nil, err
+		}
+		ends[i] = end
+	}
+	for i := 0; i+1 < len(u.dir); i++ {
+		// #nosec G115 -- init holds every entry offset to 0 <= offset <= dirOffset
+		if next := int64(u.dir[i+1].offset); ends[i] > next {
+			return nil, fmt.Errorf("zip: entry %q ends at %d and entry %q begins at %d: %w",
+				u.dir[i].Name, ends[i], u.dir[i+1].Name, next, ErrFormat)
+		}
+	}
+	return ends, nil
+}
+
 func (u *Updater) RemoveFile(dirIndex int) (int64, error) {
+	// What disappears is what the entry occupies, worked out from its own
+	// header rather than from where the entry after it begins: a central
+	// directory may name entries whose regions overlap, and cutting up to
+	// the next offset then takes a neighbour's bytes with it. Padding
+	// between two entries is not the entry's and stays where it is, moving
+	// down with everything else.
+	ends, err := u.extents()
+	if err != nil {
+		return 0, err
+	}
 	// #nosec G115 -- init holds every entry offset to 0 <= offset <= dirOffset
 	var start = int64(u.dir[dirIndex].offset)
-	var end int64
-	if dirIndex == len(u.dir)-1 {
-		end = u.dirOffset
-	} else {
-		// #nosec G115 -- init holds every entry offset to 0 <= offset <= dirOffset
-		end = int64(u.dir[dirIndex+1].offset)
-	}
+	var end = ends[dirIndex]
 	var size = end - start
 
 	const chunkBufSize = 2 * 1024 * 1024 // 2MB для быстрого сдвига
@@ -597,6 +760,32 @@ func (u *Updater) Close() error {
 	return u.zeroFill(curr, end)
 }
 
+// stripZip64Extra answers a copy of an extra field area with every zip64
+// record taken out of it. The records an entry arrives with were written for
+// the layout the archive had; the one the directory below writes is for the
+// layout it is being given, and a reader takes its fields from the first
+// record it meets, so only one of them may be there.
+//
+// The area is walked exactly as readDirectoryHeader walks it, so what is
+// dropped is what a reader would have found and no more. A record that stops
+// the walk keeps everything from itself onward: those bytes are the entry's,
+// not this package's to decide about.
+func stripZip64Extra(extra []byte) []byte {
+	out := make([]byte, 0, len(extra))
+	i := 0
+	for i+4 <= len(extra) {
+		size := int(binary.LittleEndian.Uint16(extra[i+2 : i+4]))
+		if i+4+size > len(extra) {
+			break
+		}
+		if binary.LittleEndian.Uint16(extra[i:i+2]) != zip64ExtraID {
+			out = append(out, extra[i:i+4+size]...)
+		}
+		i += 4 + size
+	}
+	return append(out, extra[i:]...)
+}
+
 // writeDirectory renders the central directory and the end record to w as
 // though they began at start, and answers the offset they end at. It writes
 // through a counter rather than asking the handle where it is, so that the
@@ -619,8 +808,14 @@ func (u *Updater) writeDirectory(w io.Writer, start int64) (int64, error) {
 		// rather than on the entry itself: this rendering may run more
 		// than once, and appending to the header each time would give
 		// the entry one record more every time it ran.
-		extra := h.Extra
-		if h.isZip64() || h.offset >= uint32max {
+		//
+		// The record the entry arrived with is dropped first, always.
+		// A reader takes the fields from the first zip64 record it
+		// meets, so a second one behind it is never read: the entry
+		// would keep the sizes and the local header offset the archive
+		// had before this rewrite, and a removal has moved that offset.
+		extra := stripZip64Extra(h.Extra)
+		if h.needsZip64() {
 			b.uint32(uint32max)
 			b.uint32(uint32max)
 
@@ -631,7 +826,7 @@ func (u *Updater) writeDirectory(w io.Writer, start int64) (int64, error) {
 			eb.uint64(h.UncompressedSize64)
 			eb.uint64(h.CompressedSize64)
 			eb.uint64(uint64(h.offset))
-			extra = append(append([]byte(nil), h.Extra...), buf[:]...)
+			extra = append(extra, buf[:]...)
 		} else {
 			b.uint32(h.CompressedSize)
 			b.uint32(h.UncompressedSize)

@@ -47,9 +47,30 @@ func (w *Writer) SetTorrentZip(b bool) {
 
 type header struct {
 	*FileHeader
-	offset     uint64
-	raw        bool
+	offset uint64
+	raw    bool
+	// zip64 says that the bytes already on disk for this entry were
+	// written in the zip64 shape: a zip64 record in the entry read out of
+	// an archive, or the choice this package made when it wrote the local
+	// header and the data descriptor itself. It is not the same question as
+	// isZip64, which only asks whether the sizes need more than four bytes:
+	// a streaming writer emits the record and a twenty four byte descriptor
+	// for an entry whose size it did not know yet, however small the entry
+	// turns out to be.
+	zip64      bool
 	torrentZip bool
+}
+
+// needsZip64 says whether the central directory record for this entry has to
+// carry a zip64 record: because a size does not fit four bytes, because the
+// local header offset does not, or because the entry is already written in the
+// zip64 shape and a reader sizes its data descriptor by what the directory
+// says. None of the three can start being true later for an entry read out of
+// an archive -- the sizes and the flag are fixed and an offset only ever moves
+// down -- so the answer taken when the archive is opened still holds when it is
+// written back out.
+func (h *header) needsZip64() bool {
+	return h.isZip64() || h.zip64 || h.offset >= uint32max
 }
 
 func NewWriter(w io.Writer) *Writer {
@@ -184,6 +205,12 @@ func (w *Writer) SetEncryptCentralDirectory(enable bool, password string) {
 }
 
 func (w *Writer) Close() error {
+	// The setters answer nothing, so the two are weighed against each other
+	// here, where the central directory is about to be written and the
+	// question of whether it is encrypted is finally asked.
+	if w.torrentZip && w.encryptCD {
+		return fmt.Errorf("zip: the central directory is to be encrypted: %w", errTorrentZipEncryption)
+	}
 	if w.last != nil && !w.last.closed {
 		if err := w.last.close(); err != nil {
 			return err
@@ -469,7 +496,29 @@ func (w *Writer) prepare(fh *FileHeader) error {
 	return nil
 }
 
+// errTorrentZipEncryption is what both contradictions between torrentzip and
+// encryption are refused with. Torrentzip's whole point is that the same files
+// give the same bytes, which is why the normalisation below clears the extra
+// field, forces method 8 and rewrites the flags -- and those three are exactly
+// what WinZip AES needs to survive: the 0x9901 record naming the real method,
+// method 99 in its place, and the encryption bit. An entry cannot have both,
+// and an archive whose central directory is encrypted is not canonical either.
+var errTorrentZipEncryption = errors.New("zip: torrentzip and encryption cannot be combined: a torrentzip archive is canonical bytes and encryption has no place to record itself in them")
+
+// errTorrentZipCanonical is what a choice torrentzip cannot honour is refused
+// with. The bytes of a torrentzip archive follow from the files in it and
+// nothing else -- every entry deflated at the maximum level, with the checksum
+// of the whole directory in the comment -- so an entry written any other way
+// does not make a worse torrentzip archive but one whose comment says
+// something untrue about it.
+var errTorrentZipCanonical = errors.New("zip: torrentzip writes every entry deflated at the maximum level, so nothing else decides how an entry is written")
+
 func (w *Writer) CreateHeader(fh *FileHeader) (io.Writer, error) {
+	// Before prepare, so that a refused entry leaves the writer exactly as
+	// it was rather than with the previous entry flushed behind it.
+	if w.torrentZip && fh.Password != "" {
+		return nil, fmt.Errorf("zip: entry %q asks for a password: %w", fh.Name, errTorrentZipEncryption)
+	}
 	if err := w.prepare(fh); err != nil {
 		return nil, err
 	}
@@ -502,13 +551,19 @@ func (w *Writer) CreateHeader(fh *FileHeader) (io.Writer, error) {
 		fh.ExternalAttrs = 0
 		fh.CreatorVersion = 0
 		fh.ReaderVersion = 20
-		if strings.HasSuffix(fh.Name, "/") {
-			fh.Method = Store
-			fh.Flags = 0
-		} else {
-			fh.Method = Deflate
-			fh.Flags = 2
-		}
+		// Every torrentzip entry is deflated, a directory included: the
+		// two byte empty deflate block the directory branch below
+		// writes is what it holds.
+		fh.Method = Deflate
+		fh.Flags = 2
+	}
+
+	// A directory entry is its header and nothing else, so a password put on
+	// one has nothing to protect: marking it encrypted would promise a body
+	// beginning with a salt and a password check and ending with an
+	// authentication code where there are no bytes at all.
+	if strings.HasSuffix(fh.Name, "/") {
+		fh.Password = ""
 	}
 
 	var originalMethod uint16
@@ -730,6 +785,16 @@ func writeHeader(w io.Writer, h *header) error {
 }
 
 func (w *Writer) CreateRaw(fh *FileHeader) (io.Writer, error) {
+	// Before prepare, so that a refused entry leaves the writer exactly as
+	// it was rather than with the previous entry flushed behind it. The
+	// bytes of a raw entry are the caller's, and the normalisation below
+	// says of every entry that it is deflated: an entry of any other method
+	// would go out under a header that does not describe it. A directory is
+	// the exception because its two bytes are not the caller's -- the empty
+	// deflate block below is this writer's own.
+	if w.torrentZip && fh.Method != Deflate && !strings.HasSuffix(filepath.ToSlash(fh.Name), "/") {
+		return nil, fmt.Errorf("zip: entry %q is written with method %d: %w", fh.Name, fh.Method, errTorrentZipCanonical)
+	}
 	if err := w.prepare(fh); err != nil {
 		return nil, err
 	}
@@ -747,17 +812,17 @@ func (w *Writer) CreateRaw(fh *FileHeader) (io.Writer, error) {
 		fh.ExternalAttrs = 0
 		fh.CreatorVersion = 0
 		fh.ReaderVersion = 20
+		// Every torrentzip entry is deflated. The caller's bytes already
+		// are, because the check above refused anything else; a
+		// directory's two are the empty deflate block written below.
+		fh.Method = Deflate
+		fh.Flags = 2
 		if strings.HasSuffix(fh.Name, "/") {
-			fh.Method = Deflate
-			fh.Flags = 2
 			fh.CompressedSize = 2
 			fh.CompressedSize64 = 2
 			fh.UncompressedSize = 0
 			fh.UncompressedSize64 = 0
 			fh.CRC32 = 0
-		} else {
-			fh.Method = Deflate
-			fh.Flags = 2
 		}
 	}
 
@@ -947,6 +1012,12 @@ func (w *fileWriter) close() error {
 		// #nosec G115 -- isZip64 is false, so both sizes are below uint32max
 		fh.UncompressedSize = uint32(fh.UncompressedSize64)
 	}
+
+	// writeDataDescriptor sizes the descriptor by isZip64, so this is the
+	// shape the bytes on disk now have; recording it here is what lets an
+	// entry this session wrote and an entry read out of an archive be
+	// measured the same way afterwards.
+	w.zip64 = w.isZip64()
 
 	if err := w.writeDataDescriptor(); err != nil {
 		return err

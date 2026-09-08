@@ -1,8 +1,10 @@
 package zip
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"os"
@@ -29,6 +31,13 @@ var copyBufPool = sync.Pool{
 		return &b
 	},
 }
+
+// errTorrentZipLink is what an entry that is not a file is refused with under
+// torrentzip. A canonical entry carries no external attributes and no creator
+// version, and those two are the whole of what makes an entry a symbolic link,
+// a hard link or a device node: written canonically it is none of them, and
+// what used to be written was neither a link nor readable.
+var errTorrentZipLink = errors.New("zip: torrentzip entries carry no external attributes and no creator version, so they cannot be links or device nodes")
 
 // newZlibWriterLevel builds the zlib stream a torrentzip entry is deflated
 // into. The constructor is a wasm build of zlib and refuses only when its own
@@ -65,6 +74,11 @@ type archiverOptions struct {
 	recoveryFile            *os.File
 	level                   int
 	pathMapping             map[string]string
+	// methodSet says whether the caller chose the method, which is what
+	// tells a choice torrentzip contradicts from a default it is free to
+	// settle. The level needs no such flag: zero is not a level but the
+	// compressor's own default, here and everywhere else in this file.
+	methodSet bool
 }
 
 // WithArchiverPathMapping sets the path mapping for logical names in the archive.
@@ -76,6 +90,9 @@ func WithArchiverPathMapping(m map[string]string) ArchiverOption {
 }
 
 // WithArchiverLevel sets the compression level (1-9 for Deflate, 1-4 for ZSTD).
+// Zero is not a level of its own but the compressor's own default, which is
+// also what asking for no level at all leaves behind; under torrentzip it
+// settles to 9, the level the canonical bytes are produced at.
 func WithArchiverLevel(level int) ArchiverOption {
 	return func(o *archiverOptions) error {
 		o.level = level
@@ -83,14 +100,13 @@ func WithArchiverLevel(level int) ArchiverOption {
 	}
 }
 
+// WithArchiverTorrentZip asks for a torrentzip archive: canonical bytes for a
+// given set of files. What that leaves no room for is settled once every
+// option has run rather than here, so that the order the options were given in
+// cannot decide the answer.
 func WithArchiverTorrentZip(b bool) ArchiverOption {
 	return func(o *archiverOptions) error {
 		o.torrentZip = b
-		if b {
-			o.method = Deflate
-			o.concurrency = 1
-			o.level = 9
-		}
 		return nil
 	}
 }
@@ -98,6 +114,7 @@ func WithArchiverTorrentZip(b bool) ArchiverOption {
 func WithArchiverMethod(method uint16) ArchiverOption {
 	return func(o *archiverOptions) error {
 		o.method = method
+		o.methodSet = true
 		return nil
 	}
 }
@@ -238,7 +255,37 @@ func NewArchiver(w io.Writer, chroot string, opts ...ArchiverOption) (*Archiver,
 		}
 	}
 
+	// Refused here rather than at the first entry: the options are all that
+	// exists yet, so nothing has been written that would have to be undone.
+	if a.options.torrentZip && a.options.password != "" {
+		return nil, fmt.Errorf("zip: a password was given: %w", errTorrentZipEncryption)
+	}
+	if a.options.torrentZip && a.options.encryptCD {
+		return nil, fmt.Errorf("zip: the central directory is to be encrypted: %w", errTorrentZipEncryption)
+	}
+
+	// Settled once every option has run, so that the order they were given
+	// in cannot decide the answer. Torrentzip's bytes follow from the files
+	// alone, which leaves the method and the level to the format rather than
+	// to the caller: what was not asked for is filled in, and a choice that
+	// contradicts the format is refused rather than quietly overridden.
+	// The number of workers only changes the order the work is done in.
 	if a.options.torrentZip {
+		switch {
+		case !a.options.methodSet:
+			a.options.method = Deflate
+		case a.options.method != Deflate:
+			return nil, fmt.Errorf("zip: method %d was asked for: %w", a.options.method, errTorrentZipCanonical)
+		}
+		// A level of zero is not a level of its own here but the
+		// compressor's default, which is what the registration below
+		// reads it as, so asking for it contradicts nothing.
+		switch {
+		case a.options.level == 0:
+			a.options.level = 9
+		case a.options.level != 9:
+			return nil, fmt.Errorf("zip: compression level %d was asked for: %w", a.options.level, errTorrentZipCanonical)
+		}
 		a.options.concurrency = 1
 	}
 
@@ -782,6 +829,10 @@ func (a *Archiver) createDirectory(fi os.FileInfo, hdr *FileHeader) error {
 	return err
 }
 func (a *Archiver) createHardlink(fi os.FileInfo, hdr *FileHeader) error {
+	if a.options.torrentZip {
+		return fmt.Errorf("zip: entry %q is a hard link: %w", hdr.Name, errTorrentZipLink)
+	}
+
 	a.m.Lock()
 	defer a.m.Unlock()
 	hdr.Flags &= ^uint16(0x8)
@@ -791,6 +842,10 @@ func (a *Archiver) createHardlink(fi os.FileInfo, hdr *FileHeader) error {
 }
 
 func (a *Archiver) createSpecialFile(fi os.FileInfo, hdr *FileHeader) error {
+	if a.options.torrentZip {
+		return fmt.Errorf("zip: entry %q is a device node or a named pipe: %w", hdr.Name, errTorrentZipLink)
+	}
+
 	a.m.Lock()
 	defer a.m.Unlock()
 	hdr.Flags &= ^uint16(0x8)
@@ -800,6 +855,10 @@ func (a *Archiver) createSpecialFile(fi os.FileInfo, hdr *FileHeader) error {
 }
 
 func (a *Archiver) createSymlink(path string, fi os.FileInfo, hdr *FileHeader) error {
+	if a.options.torrentZip {
+		return fmt.Errorf("zip: entry %q is a symbolic link: %w", hdr.Name, errTorrentZipLink)
+	}
+
 	a.m.Lock()
 	defer a.m.Unlock()
 
@@ -814,12 +873,41 @@ func (a *Archiver) createSymlink(path string, fi os.FileInfo, hdr *FileHeader) e
 	hdr.UncompressedSize64 = hdr.CompressedSize64
 	hdr.CRC32 = crc32.ChecksumIEEE([]byte(link))
 
+	// The target is the entry's data like any other, and an archive that
+	// wrote its link targets in the clear would not be an encrypted one. It
+	// is encrypted here rather than on the way out because the header is
+	// written first and has to say how long the body is, frame and all: the
+	// salt and the password check in front of the target, and the
+	// authentication code behind it. An AE-2 entry carries no checksum of
+	// its own, and its size is the whole of what goes into the archive.
+	body := link
+	if hdr.Password != "" {
+		if hdr.AESStrength == 0 {
+			hdr.AESStrength = 3
+		}
+		var enc bytes.Buffer
+		aw, aerr := newWinZipAesWriter(&enc, hdr.Password, hdr.AESStrength)
+		if aerr != nil {
+			return aerr
+		}
+		// Neither of these can report anything: a bytes.Buffer takes
+		// every write, and the AES layer only passes on what it is
+		// given. The write that can fail is the one into the archive.
+		_, _ = io.WriteString(aw, link)
+		_ = aw.Close()
+
+		body = enc.String()
+		// #nosec G115 -- not a narrowing: the buffer holds a link target and the frame around it, and a buffer's length is never negative
+		hdr.CompressedSize64 = uint64(enc.Len())
+		hdr.CRC32 = 0
+	}
+
 	w, err := a.createHeaderRaw(fi, hdr)
 	if err != nil {
 		return err
 	}
 
-	_, err = io.WriteString(w, link)
+	_, err = io.WriteString(w, body)
 	incOnSuccess(&a.entries, err)
 	return err
 }
@@ -890,6 +978,10 @@ func (a *Archiver) compressFile(ctx context.Context, r io.ReadSeeker, fi os.File
 		a.m.Lock()
 		defer a.m.Unlock()
 
+		// The two bytes below are an empty deflate block, so the header
+		// says deflate because that is what is about to be written and
+		// not because a rewrite downstream will say so.
+		hdr.Method = Deflate
 		hdr.CompressedSize64 = 2
 		hdr.CRC32 = 0
 
@@ -1073,6 +1165,17 @@ func (a *Archiver) createHeaderRaw(fi os.FileInfo, fh *FileHeader) (io.Writer, e
 
 	fh.CreatorVersion = fh.CreatorVersion&0xff00 | zipVersion20
 	fh.ReaderVersion = zipVersion20
+
+	// An entry the caller declares no bytes for -- a hard link, a device
+	// node, a named pipe -- is its header and nothing else, so a password
+	// has nothing to protect here. Marking it encrypted would promise a body
+	// beginning with a salt and a password check and ending with an
+	// authentication code inside no bytes at all, which is what used to
+	// leave such an entry unopenable. Whatever the entry is, this asks the
+	// bytes it declares and not what kind of entry it is.
+	if fh.CompressedSize64 == 0 {
+		fh.Password = ""
+	}
 
 	fh.injectAutoExtras()
 

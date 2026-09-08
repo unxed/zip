@@ -438,3 +438,76 @@ func TestOpenReaderReportsAMissingArchive(t *testing.T) {
 		t.Fatalf("opening a missing archive gave %v", err)
 	}
 }
+
+// TestFindHiddenIndexIgnoresAListedEntry: a seek index is a local entry the
+// central directory does not list, so an entry the directory does list is not
+// one however it is named. An archive may hold an entry called
+// ".a.txt.sozip.idx" written straight after "a.txt" -- this package's own
+// writer produces one from those two names -- and taking it for a's index
+// blames a valid archive for an index it does not have.
+func TestFindHiddenIndexIgnoresAListedEntry(t *testing.T) {
+	indexLike := ".a.txt.sozip.idx"
+	listed := []byte("a listed entry that only looks like an index")
+
+	var built bytes.Buffer
+	w := NewWriter(&built)
+	for _, e := range []struct {
+		name   string
+		body   []byte
+		method uint16
+	}{
+		{"a.txt", bytes.Repeat([]byte("abcdefgh"), 512), Deflate},
+		{indexLike, listed, Store},
+	} {
+		fw, err := w.CreateHeader(&FileHeader{Name: e.name, Method: e.method})
+		if err != nil {
+			t.Fatalf("%s: CreateHeader: %v", e.name, err)
+		}
+		if _, err := fw.Write(e.body); err != nil {
+			t.Fatalf("%s: write: %v", e.name, err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("closing the writer: %v", err)
+	}
+	raw := built.Bytes()
+
+	zr, err := NewReader(bytes.NewReader(raw), int64(len(raw)))
+	if err != nil {
+		t.Fatalf("reading the archive back: %v", err)
+	}
+	var target *File
+	for _, f := range zr.File {
+		if f.Name == "a.txt" {
+			target = f
+		}
+	}
+	if target == nil {
+		t.Fatal("the entry the index-like name follows is not in the archive")
+	}
+
+	kind, payload, err := target.findHiddenIndex()
+	if err != nil {
+		t.Fatalf("looking for an index reported %v", err)
+	}
+	if kind != 0 {
+		t.Fatalf("the entry the directory lists was taken for a seek index of kind %d holding %d bytes",
+			kind, len(payload))
+	}
+
+	// And it is still an entry: it reads back as what was written.
+	rc, err := zr.File[1].Open()
+	if err != nil {
+		t.Fatalf("opening the listed entry: %v", err)
+	}
+	got, rerr := io.ReadAll(rc)
+	if cerr := rc.Close(); rerr == nil {
+		rerr = cerr
+	}
+	if rerr != nil {
+		t.Fatalf("reading the listed entry: %v", rerr)
+	}
+	if !bytes.Equal(got, listed) {
+		t.Fatalf("the listed entry reads back as %q", got)
+	}
+}

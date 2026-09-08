@@ -149,14 +149,22 @@ func TestArchiver_TorrentZip(t *testing.T) {
 	}
 }
 
-func TestWithArchiverTorrentZip_SetsLevel9(t *testing.T) {
+// TestWithArchiverTorrentZip_RecordsOnlyTheRequest pins that the option itself
+// settles nothing. The method and the level a torrentzip archive is written
+// with follow from the format once every option has run, so that giving the
+// options in either order cannot change the answer;
+// TestTorrentZipSettlesWhatWasNotAskedFor pins the settlement.
+func TestWithArchiverTorrentZip_RecordsOnlyTheRequest(t *testing.T) {
 	opts := &archiverOptions{}
 	opt := WithArchiverTorrentZip(true)
 	if err := opt(opts); err != nil {
 		t.Fatal(err)
 	}
-	if opts.level != 9 {
-		t.Errorf("expected level 9, got %d", opts.level)
+	if !opts.torrentZip {
+		t.Error("the option did not record that torrentzip was asked for")
+	}
+	if opts.methodSet || opts.level != 0 {
+		t.Error("the option decided the method or the level before the other options had run")
 	}
 }
 
@@ -379,5 +387,48 @@ func TestTorrentZip_SlashNormalization(t *testing.T) {
 	expectedName := "dir1/file.txt"
 	if zr.File[0].Name != expectedName {
 		t.Errorf("expected slash normalization, got %q", zr.File[0].Name)
+	}
+}
+
+// TestTorrentZip_DirectoriesOnlySortDeterministically pins the ordering rule
+// on an archive of nothing but directories. The comparator gives a directory a
+// trailing slash before it compares, on either side of the comparison, and an
+// archive that mixes files with directories only reaches the second of those
+// two when the order the names arrive in happens to put a directory on the
+// right; with nothing but directories every comparison is one.
+func TestTorrentZip_DirectoriesOnlySortDeterministically(t *testing.T) {
+	src := t.TempDir()
+	for _, name := range []string{"beta", "alpha", "gamma"} {
+		mustMkdirAll(t, filepath.Join(src, name))
+	}
+
+	var buf bytes.Buffer
+	a, err := NewArchiver(&buf, src, WithArchiverTorrentZip(true))
+	if err != nil {
+		t.Fatalf("new archiver: %v", err)
+	}
+	if err := a.Archive(context.Background(), walkFilesFor(t, src)); err != nil {
+		t.Fatalf("archiving: %v", err)
+	}
+	if err := a.Close(); err != nil {
+		t.Fatalf("closing: %v", err)
+	}
+
+	r, err := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("reading back: %v", err)
+	}
+	var got []string
+	for _, f := range r.File {
+		got = append(got, f.Name)
+	}
+	want := []string{"alpha/", "beta/", "gamma/"}
+	if len(got) != len(want) {
+		t.Fatalf("the archive lists %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("the archive lists %v, and torrentzip orders them %v", got, want)
+		}
 	}
 }

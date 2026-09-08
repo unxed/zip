@@ -952,7 +952,11 @@ func TestExtractorCovSolidNameEscapesTheDestination(t *testing.T) {
 
 func TestExtractorCovSolidParentChainRunsThroughAFile(t *testing.T) {
 	// A file the inner archive wrote a moment ago standing where a later
-	// entry's parent belongs.
+	// entry's parent belongs. The archive names one path as a file and as a
+	// directory both, and this package promises nothing about which of the
+	// two it ends up as: the entry that gets there first wins, and the other
+	// one is what fails or is undone. So what is asserted here is what holds
+	// in either order.
 	if runtime.GOOS == "windows" {
 		t.Skip("a name below a file reads as missing here rather than as a bad path")
 	}
@@ -961,8 +965,52 @@ func TestExtractorCovSolidParentChainRunsThroughAFile(t *testing.T) {
 		extractorCovStored("blocker/sub/deep.txt", []byte("x")),
 	)
 	body = append(body, extractorCovCentral()...)
-	if _, err := extractorCovExtract(t, extractorCovSolid(t, body, false)); err == nil {
-		t.Fatal("an entry whose parent chain runs through a file was reported as extracted")
+	dst, err := extractorCovExtract(t, extractorCovSolid(t, body, false))
+
+	// Whatever the extraction answered, everything it left is something its
+	// owner can walk into. A directory wearing an entry's file mode has no
+	// search bit, and neither the caller nor this test's own temporary
+	// directory could then be rid of it.
+	if werr := filepath.WalkDir(dst, func(p string, d os.DirEntry, werr error) error {
+		if werr != nil || !d.IsDir() {
+			return werr
+		}
+		fi, serr := d.Info()
+		if serr != nil {
+			return serr
+		}
+		if fi.Mode().Perm()&0o100 == 0 {
+			t.Errorf("%s is a directory with mode %v, which its owner cannot go into (Extract said %v)",
+				p, fi.Mode().Perm(), err)
+		}
+		return nil
+	}); werr != nil {
+		t.Fatalf("walking what the extraction left: %v (Extract said %v)", werr, err)
+	}
+
+	blocker := filepath.Join(dst, "blocker")
+	fi, serr := os.Lstat(blocker)
+	switch {
+	case err == nil:
+		// The directory won and the file entry was undone: the entry
+		// below the name has to be there, or nothing was gained by it.
+		if serr != nil || !fi.IsDir() {
+			t.Fatalf("the extraction reported success and %s is %v (%v)", blocker, fi, serr)
+		}
+		deep, rerr := os.ReadFile(filepath.Join(blocker, "sub", "deep.txt"))
+		if rerr != nil || string(deep) != "x" {
+			t.Fatalf("the extraction reported success and the entry below the name reads %q (%v)", deep, rerr)
+		}
+	case serr != nil:
+		// The name was never made at all, which is a fine way to fail.
+	case fi.IsDir():
+		// The directory won and the file entry is what failed.
+	default:
+		// The file won and the entry below it is what failed.
+		data, rerr := os.ReadFile(blocker)
+		if rerr != nil || string(data) != "in the way" {
+			t.Fatalf("the file entry won and %s holds %q (%v)", blocker, data, rerr)
+		}
 	}
 }
 
