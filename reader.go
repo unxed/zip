@@ -92,6 +92,12 @@ type Reader struct {
 	password      func() string // Callback to retrieve the password
 
 	baseOffset int64
+	// volumeStarts holds where each volume begins in the joined stream when
+	// the archive was opened as a set of volumes; it is nil otherwise.
+	volumeStarts []int64
+	// splitStarts is volumeStarts once the archive turned out to be a ZIP
+	// split archive, whose offsets are relative to a volume's start.
+	splitStarts []int64
 
 	fileListOnce sync.Once
 	fileList     []fileListEntry
@@ -112,8 +118,12 @@ type File struct {
 	zip          *Reader
 	zipr         io.ReaderAt
 	headerOffset int64
-	zip64        bool
-	aesInfo      *winzipAesInfo
+	// diskNbr is the volume the entry starts on, as the central directory
+	// records it. In a split archive headerOffset is measured from the
+	// start of that volume, not of the archive (APPNOTE 4.4.16).
+	diskNbr uint32
+	zip64   bool
+	aesInfo *winzipAesInfo
 }
 
 func OpenReaderWithPassword(name string, password string) (*ReadCloser, error) {
@@ -134,6 +144,7 @@ func OpenReaderWithPassword(name string, password string) (*ReadCloser, error) {
 
 	zr := new(ReadCloser)
 	zr.volumes = mvr
+	zr.volumeStarts = mvr.VolumeStarts()
 	if password != "" {
 		zr.SetPassword(password)
 	}
@@ -261,6 +272,19 @@ func (r *Reader) init(rdr io.ReaderAt, size int64) error {
 	}
 	r.r = rdr
 	r.baseOffset = baseOffset
+	// A ZIP split archive (archive.z01, archive.z02, ..., archive.zip)
+	// counts its offsets from the start of the volume an entry lives on,
+	// and names that volume in the entry. One base offset for the whole
+	// archive can only be right for the entries of a single volume, which
+	// is why files stored in earlier volumes read back as garbage.
+	if starts := r.volumeStarts; len(starts) > 1 && (end.diskNbr > 0 || end.dirDiskNbr > 0) {
+		if start, ok := volumeStart(starts, end.dirDiskNbr); ok {
+			if off := start + int64(end.directoryOffset); off >= 0 && off < size && hasDirectoryHeader(rdr, off) {
+				r.splitStarts = starts
+				r.baseOffset = start
+			}
+		}
+	}
 
 	// #nosec G115 -- NewReaderWithPassword refuses a negative size, so this is the length of the archive
 	if end.directorySize < uint64(size) && (uint64(size)-end.directorySize)/30 >= end.directoryRecords {
@@ -313,7 +337,15 @@ func (r *Reader) init(rdr io.ReaderAt, size int64) error {
 		if err != nil {
 			return err
 		}
-		f.headerOffset += r.baseOffset
+		if r.splitStarts != nil {
+			start, ok := volumeStart(r.splitStarts, f.diskNbr)
+			if !ok {
+				return ErrFormat
+			}
+			f.headerOffset += start
+		} else {
+			f.headerOffset += r.baseOffset
+		}
 		r.File = append(r.File, f)
 	}
 	// The end record counts its entries in two bytes, so only the low
@@ -1043,7 +1075,8 @@ func readDirectoryHeader(f *File, r io.Reader) error {
 	filenameLen := int(b.uint16())
 	extraLen := int(b.uint16())
 	commentLen := int(b.uint16())
-	b = b[4:]
+	f.diskNbr = uint32(b.uint16())
+	b = b[2:] // internal attributes
 	f.ExternalAttrs = b.uint32()
 	f.headerOffset = int64(b.uint32())
 	d := make([]byte, filenameLen+extraLen+commentLen)
@@ -1080,6 +1113,7 @@ func readDirectoryHeader(f *File, r io.Reader) error {
 	needUSize := f.UncompressedSize == ^uint32(0)
 	needCSize := f.CompressedSize == ^uint32(0)
 	needHeaderOffset := f.headerOffset == int64(^uint32(0))
+	needDiskNbr := f.diskNbr == uint32(^uint16(0))
 
 	var modified time.Time
 parseExtras:
@@ -1115,6 +1149,13 @@ parseExtras:
 				}
 				// #nosec G115 -- an offset above MaxInt64 arrives negative and the entry is refused by the check at the end of this function
 				f.headerOffset = int64(fieldBuf.uint64())
+			}
+			if needDiskNbr {
+				needDiskNbr = false
+				if len(fieldBuf) < 4 {
+					return ErrFormat
+				}
+				f.diskNbr = fieldBuf.uint32()
 			}
 		case ntfsExtraID:
 			if len(fieldBuf) < 4 {
@@ -1768,4 +1809,21 @@ func (d *openDir) ReadDir(count int) ([]fs.DirEntry, error) {
 	}
 	d.offset += n
 	return list, nil
+}
+
+// volumeStart returns where volume number disk begins in the joined stream.
+func volumeStart(starts []int64, disk uint32) (int64, bool) {
+	if disk >= uint32(len(starts)) {
+		return 0, false
+	}
+	return starts[disk], true
+}
+
+// hasDirectoryHeader reports whether a central directory entry begins at off.
+func hasDirectoryHeader(r io.ReaderAt, off int64) bool {
+	var sig [4]byte
+	if _, err := r.ReadAt(sig[:], off); err != nil {
+		return false
+	}
+	return binary.LittleEndian.Uint32(sig[:]) == directoryHeaderSignature
 }

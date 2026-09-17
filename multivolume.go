@@ -91,6 +91,16 @@ func (m *MultiVolumeReader) Append(data []byte) error {
 	return err
 }
 
+// VolumeStarts returns the offset at which each volume begins within the
+// joined stream, in volume order. A ZIP split archive stores the offsets in
+// its central directory relative to the volume an entry starts on, so a
+// reader needs these to place the entries (APPNOTE 4.4.15, 4.4.16).
+func (m *MultiVolumeReader) VolumeStarts() []int64 {
+	starts := make([]int64, len(m.offsets))
+	copy(starts, m.offsets)
+	return starts
+}
+
 func (m *MultiVolumeReader) Close() error {
 	var lastErr error
 	for _, f := range m.files {
@@ -114,6 +124,12 @@ func (m *MultiVolumeReader) Close() error {
 // split of one archive rather than the split format those names stand for;
 // they are opened by the .zip name, as before.
 func OpenMultiVolume(mainPath string, flag int) (*MultiVolumeReader, int64, error) {
+	// A ZIP split archive keeps its central directory in the last volume,
+	// the one named .zip, so opening it by one of the .z01, .z02, ... parts
+	// means opening the whole set from that .zip.
+	if main, ok := splitVolumeArchiveName(mainPath); ok {
+		mainPath = main
+	}
 	if strings.HasSuffix(mainPath, ".001") {
 		return openNumberedVolumes(strings.TrimSuffix(mainPath, ".001"), flag)
 	}
@@ -324,4 +340,26 @@ func (m *MultiVolumeWriter) Sync() error {
 
 func (m *MultiVolumeWriter) Name() string {
 	return m.mainPath
+}
+
+// splitVolumeArchiveName maps the name of a ZIP split volume -- archive.z01,
+// archive.z02 and so on -- to the archive's own name, archive.zip, when that
+// file is there beside it. Anything else is left alone.
+func splitVolumeArchiveName(name string) (string, bool) {
+	ext := strings.ToLower(filepath.Ext(name))
+	if len(ext) < 4 || !strings.HasPrefix(ext, ".z") {
+		return "", false
+	}
+	for _, c := range ext[2:] {
+		if c < '0' || c > '9' {
+			return "", false
+		}
+	}
+	stem := name[:len(name)-len(ext)]
+	for _, mainExt := range []string{".zip", ".zipx"} {
+		if _, err := os.Stat(stem + mainExt); err == nil {
+			return stem + mainExt, true
+		}
+	}
+	return "", false
 }
