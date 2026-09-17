@@ -63,7 +63,7 @@ type archiverOptions struct {
 	encryptCD               bool
 	torrentZip              bool
 	recoveryPct             int
-	recoveryFile            *os.File
+	recoveryFile            recoverySource
 	level                   int
 	pathMapping             map[string]string
 }
@@ -208,8 +208,13 @@ type Archiver struct {
 func WithArchiverRecovery(pct int, f interface{ Name() string }) ArchiverOption {
 	return func(o *archiverOptions) error {
 		o.recoveryPct = pct
-		if osFile, ok := f.(*os.File); ok {
-			o.recoveryFile = osFile
+		// Any named sink will do, a *MultiVolumeWriter included: the
+		// data is read back from the name. Only *os.File used to be
+		// taken, so an archive split into volumes silently got no
+		// recovery record. A nil *os.File is still no source; in the
+		// interface it would pass for one.
+		if osFile, ok := f.(*os.File); !ok || osFile != nil {
+			o.recoveryFile = f
 		}
 		return nil
 	}

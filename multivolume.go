@@ -101,8 +101,28 @@ func (m *MultiVolumeReader) Close() error {
 	return lastErr
 }
 
-// OpenMultiVolume looks for archive parts (.z01, .z02...) alongside the .zip file
+// OpenMultiVolume opens an archive that may be split into volumes, as one
+// stream of bytes.
+//
+// NewMultiVolumeWriter numbers the volumes after the archive's name --
+// archive.zip.001, archive.zip.002 and so on -- the way 7-Zip names the
+// volumes of its -v switch and reads them back, and the way this project's
+// tar volumes are named. They are opened by the name of the first volume, or
+// by the archive's own name when no file has that name. Volumes this package
+// wrote before took the ZIP split names instead, archive.z01, archive.z02 and
+// so on with the last one named archive.zip, while holding the same plain
+// split of one archive rather than the split format those names stand for;
+// they are opened by the .zip name, as before.
 func OpenMultiVolume(mainPath string, flag int) (*MultiVolumeReader, int64, error) {
+	if strings.HasSuffix(mainPath, ".001") {
+		return openNumberedVolumes(strings.TrimSuffix(mainPath, ".001"), flag)
+	}
+	if _, err := os.Stat(mainPath); os.IsNotExist(err) {
+		if _, err := os.Stat(mainPath + ".001"); err == nil {
+			return openNumberedVolumes(mainPath, flag)
+		}
+	}
+
 	ext := strings.ToLower(filepath.Ext(mainPath))
 	if ext != ".zip" && ext != ".zipx" {
 		fMain, err := os.OpenFile(mainPath, flag, 0644)
@@ -170,7 +190,42 @@ func OpenMultiVolume(mainPath string, flag int) (*MultiVolumeReader, int64, erro
 	return m, totalSize, nil
 }
 
-// MultiVolumeWriter transparently splits data across multiple files.
+// openNumberedVolumes opens stem.001, stem.002 and so on up to the first
+// number that is missing.
+func openNumberedVolumes(stem string, flag int) (*MultiVolumeReader, int64, error) {
+	var files []*os.File
+	var offsets []int64
+	var totalSize int64
+	for i := 1; ; i++ {
+		f, err := os.OpenFile(volumeName(stem, i), flag, 0644)
+		if err != nil {
+			if i > 1 && os.IsNotExist(err) {
+				break
+			}
+			for _, opened := range files {
+				// The volumes opened so far are given up because
+				// this one could not be opened; that is the error
+				// the caller gets.
+				_ = opened.Close()
+			}
+			return nil, 0, err
+		}
+		fi, _ := f.Stat()
+		offsets = append(offsets, totalSize)
+		totalSize += fi.Size()
+		files = append(files, f)
+	}
+	return &MultiVolumeReader{files: files, offsets: offsets, size: totalSize}, totalSize, nil
+}
+
+// volumeName is the name of volume i of the archive named stem.
+func volumeName(stem string, i int) string {
+	return fmt.Sprintf("%s.%03d", stem, i)
+}
+
+// MultiVolumeWriter transparently splits data across multiple files, named
+// after the archive: mainPath.001, mainPath.002 and so on (see
+// OpenMultiVolume). No file is written under mainPath itself.
 type MultiVolumeWriter struct {
 	mainPath    string
 	splitSize   int64
@@ -187,6 +242,11 @@ func NewMultiVolumeWriter(mainPath string, splitSize int64) (*MultiVolumeWriter,
 	if splitSize <= 0 {
 		return nil, fmt.Errorf("zip: volume size %d is not a size", splitSize)
 	}
+	// An archive written under the same name before, in one piece, would
+	// be what OpenMultiVolume opens by that name instead of these volumes.
+	if err := os.Remove(mainPath); err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
 	m := &MultiVolumeWriter{mainPath: mainPath, splitSize: splitSize}
 	if err := m.openNextVolume(); err != nil {
 		return nil, err
@@ -201,10 +261,7 @@ func (m *MultiVolumeWriter) openNextVolume() error {
 		}
 	}
 	m.volumeIndex++
-	ext := filepath.Ext(m.mainPath)
-	prefix := m.mainPath[:len(m.mainPath)-len(ext)]
-	volPath := fmt.Sprintf("%s.z%02d", prefix, m.volumeIndex)
-	f, err := os.Create(volPath)
+	f, err := os.Create(volumeName(m.mainPath, m.volumeIndex))
 	if err != nil {
 		return err
 	}
@@ -242,23 +299,20 @@ func (m *MultiVolumeWriter) Close() error {
 	if m.currentFile == nil {
 		return nil
 	}
-	err := m.currentFile.Close()
-	if err != nil {
-		return err
-	}
-	ext := filepath.Ext(m.mainPath)
-	prefix := m.mainPath[:len(m.mainPath)-len(ext)]
-	lastVolPath := fmt.Sprintf("%s.z%02d", prefix, m.volumeIndex)
-
-	// Making room for the rename below, which is what actually has to
-	// succeed: on Windows it will not replace a name that is still there,
-	// and it reports that itself.
-	_ = os.Remove(m.mainPath)
-	if err := os.Rename(lastVolPath, m.mainPath); err != nil {
+	if err := m.currentFile.Close(); err != nil {
 		return err
 	}
 	m.currentFile = nil
-	return nil
+	// Volumes past the last one, left by an archive of the same name that
+	// took more of them, would be read as the rest of this one.
+	for i := m.volumeIndex + 1; ; i++ {
+		if err := os.Remove(volumeName(m.mainPath, i)); err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+	}
 }
 
 func (m *MultiVolumeWriter) Sync() error {

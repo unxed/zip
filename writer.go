@@ -32,7 +32,14 @@ type Writer struct {
 	forceNoDescriptor       bool
 	torrentZip              bool
 	recoveryPct             int
-	recoveryFile            *os.File
+	recoveryFile            recoverySource
+}
+
+// recoverySource is what the recovery data is computed from: the archive being
+// written, reopened by its name, which may be the name of a volume set (see
+// OpenMultiVolume). A Sync method, when it has one, is called first.
+type recoverySource interface {
+	Name() string
 }
 
 // SetTorrentZip enables torrentzip compatibility mode.

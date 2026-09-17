@@ -258,6 +258,17 @@ func TestOpenMultiVolumeFailures(t *testing.T) {
 // TestNewMultiVolumeWriterCreateFailure pins down that a writer which cannot
 // create its first volume reports that instead of handing back a writer whose
 // every later call would fail on a nil handle.
+func TestNewMultiVolumeWriterStaleArchiveInTheWay(t *testing.T) {
+	tmp := t.TempDir()
+	main := filepath.Join(tmp, "taken.zip")
+	mustMkdir(t, main)
+	mustWriteFile(t, filepath.Join(main, "keep.txt"), []byte("k"), 0o600)
+	if mvw, err := NewMultiVolumeWriter(main, 16); err == nil {
+		_ = mvw.Close()
+		t.Fatal("a writer was made although what holds the archive's name cannot be removed, and would be opened by that name instead of the volumes")
+	}
+}
+
 func TestNewMultiVolumeWriterCreateFailure(t *testing.T) {
 	tmp := t.TempDir()
 	mvw, err := NewMultiVolumeWriter(filepath.Join(tmp, "absent", "a.zip"), 16)
@@ -311,9 +322,9 @@ func TestMultiVolumeWriterWriteFailures(t *testing.T) {
 }
 
 // TestMultiVolumeWriterCloseFailures covers the finishing step. Close both
-// closes the last volume and gives it the main archive name, and neither half
-// may be reported as done when it did not happen: an archive left under its
-// .zNN name is one no reader will find.
+// closes the last volume and removes volumes an earlier archive of the same
+// name left past it, and neither may be reported as done when it did not
+// happen: a stale volume is read back as the rest of the archive.
 func TestMultiVolumeWriterCloseFailures(t *testing.T) {
 	t.Run("the last volume cannot be closed", func(t *testing.T) {
 		tmp := t.TempDir()
@@ -321,7 +332,7 @@ func TestMultiVolumeWriterCloseFailures(t *testing.T) {
 		mvw := &MultiVolumeWriter{
 			mainPath:    main,
 			splitSize:   16,
-			currentFile: mvClosedHandle(t, tmp, "unclosable.z01"),
+			currentFile: mvClosedHandle(t, tmp, "unclosable.zip.001"),
 			volumeIndex: 1,
 		}
 		if err := mvw.Close(); err == nil {
@@ -332,7 +343,7 @@ func TestMultiVolumeWriterCloseFailures(t *testing.T) {
 		}
 	})
 
-	t.Run("the last volume cannot take the main name", func(t *testing.T) {
+	t.Run("a volume left past the last one cannot be removed", func(t *testing.T) {
 		tmp := t.TempDir()
 		main := filepath.Join(tmp, "occupied.zip")
 
@@ -343,17 +354,17 @@ func TestMultiVolumeWriterCloseFailures(t *testing.T) {
 		closeAt(t, mvw)
 		mustWrite(t, mvw, []byte("0123456789"))
 
-		// A non-empty directory under the main name can be neither
-		// removed nor replaced by a rename, on either system.
-		mustMkdir(t, main)
-		mustWriteFile(t, filepath.Join(main, "keep.txt"), []byte("k"), 0o600)
+		// A non-empty directory under the next volume's name can be
+		// removed on neither system, and a reader would take it for the
+		// rest of the archive.
+		stale := main + ".003"
+		mustMkdir(t, stale)
+		mustWriteFile(t, filepath.Join(stale, "keep.txt"), []byte("k"), 0o600)
 
 		if err := mvw.Close(); err == nil {
-			t.Fatal("the rename onto an occupied name reported success")
+			t.Fatal("closing reported success with a stale volume left behind")
 		}
-		// The bytes are still on disk under the volume name, which is
-		// what lets the caller retry or move them by hand.
-		last := filepath.Join(tmp, "occupied.z02")
+		last := main + ".002"
 		fi, err := os.Stat(last)
 		if err != nil {
 			t.Fatalf("stat %s: %v", last, err)

@@ -124,7 +124,7 @@ func TestMultiVolumeWriter_Roundtrip(t *testing.T) {
 	}
 	closeAt(t, mvw)
 
-	data := []byte("abcdefghijklmnopqrstuvwxyz") // 26 bytes -> z01(10), z02(10), zip(6)
+	data := []byte("abcdefghijklmnopqrstuvwxyz") // 26 bytes -> .001(10), .002(10), .003(6)
 	if _, err := mvw.Write(data); err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
@@ -132,15 +132,13 @@ func TestMultiVolumeWriter_Roundtrip(t *testing.T) {
 		t.Fatalf("close failed: %v", err)
 	}
 
-	prefix := mainPath[:len(mainPath)-len(".zip")]
-	if _, err := os.Stat(prefix + ".z01"); err != nil {
-		t.Errorf("missing volume .z01")
+	for _, part := range []string{".001", ".002", ".003"} {
+		if _, err := os.Stat(mainPath + part); err != nil {
+			t.Errorf("missing volume %s", part)
+		}
 	}
-	if _, err := os.Stat(prefix + ".z02"); err != nil {
-		t.Errorf("missing volume .z02")
-	}
-	if _, err := os.Stat(mainPath); err != nil {
-		t.Errorf("missing main volume .zip")
+	if _, err := os.Stat(mainPath); !os.IsNotExist(err) {
+		t.Errorf("a file was written under the archive name itself: %v", err)
 	}
 
 	mvr, totalSize, err := OpenMultiVolume(mainPath, os.O_RDONLY)
@@ -164,9 +162,10 @@ func TestMultiVolumeWriter_Roundtrip(t *testing.T) {
 
 // TestMultiVolumeWriterSplitsOnDisk pins down what the writer leaves on disk:
 // every volume but the last holds exactly splitSize bytes, the parts are
-// numbered from .z01 upwards, and the tail of the stream ends up in the main
-// name rather than in a further numbered part. Without this a writer that
-// renamed the wrong volume, or one that started numbering at .z00, would still
+// numbered after the archive's name from .001 upwards, the last one holds the
+// tail, and volumes past it and a file under the archive's own name, left by
+// an earlier archive of that name, are gone. Without this a writer that
+// started numbering at .000, or left a stale part to be read back, would still
 // pass a round trip through OpenMultiVolume, because the reader would follow
 // the same wrong rule.
 func TestMultiVolumeWriterSplitsOnDisk(t *testing.T) {
@@ -174,14 +173,17 @@ func TestMultiVolumeWriterSplitsOnDisk(t *testing.T) {
 	main := filepath.Join(tmp, "split.zip")
 	const volSize = 1024
 
+	mustWriteFile(t, main, []byte("an archive written here before"), 0o600)
+	mustWriteFile(t, main+".004", []byte("a volume of an archive written here before"), 0o600)
+
 	mvw, err := NewMultiVolumeWriter(main, volSize)
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
 	closeAt(t, mvw)
 
-	// 2560 bytes at 1024 per volume: .z01, .z02 and 512 bytes left for the
-	// main name. The data goes out in chunks that do not line up with the
+	// 2560 bytes at 1024 per volume: .001, .002 and 512 bytes left for
+	// .003. The data goes out in chunks that do not line up with the
 	// volume size, so a chunk has to be split across a boundary.
 	var want []byte
 	for i := 0; i < 5; i++ {
@@ -199,14 +201,13 @@ func TestMultiVolumeWriterSplitsOnDisk(t *testing.T) {
 		t.Fatalf("close writer: %v", err)
 	}
 
-	prefix := main[:len(main)-len(".zip")]
 	for _, part := range []struct {
 		path string
 		size int64
 	}{
-		{prefix + ".z01", volSize},
-		{prefix + ".z02", volSize},
-		{main, 512},
+		{main + ".001", volSize},
+		{main + ".002", volSize},
+		{main + ".003", 512},
 	} {
 		fi, err := os.Stat(part.path)
 		if err != nil {
@@ -216,10 +217,17 @@ func TestMultiVolumeWriterSplitsOnDisk(t *testing.T) {
 			t.Errorf("%s holds %d bytes, want %d", part.path, fi.Size(), part.size)
 		}
 	}
-	if _, err := os.Stat(prefix + ".z03"); !os.IsNotExist(err) {
-		t.Errorf("the last volume was left as .z03 instead of being renamed to %s", main)
+	for _, stale := range []string{main, main + ".004"} {
+		if _, err := os.Stat(stale); !os.IsNotExist(err) {
+			t.Errorf("%s from the archive written before is still there: %v", stale, err)
+		}
 	}
 
+	// By the archive's name and by the name of the first volume alike.
+	first, _ := mvOpen(t, main+".001", os.O_RDONLY)
+	if first.size != int64(len(want)) {
+		t.Errorf("opened by the first volume, the set is %d bytes, want %d", first.size, len(want))
+	}
 	mvr, size := mvOpen(t, main, os.O_RDONLY)
 	if size != int64(len(want)) {
 		t.Fatalf("reopened size %d, want %d", size, len(want))
@@ -266,8 +274,7 @@ func TestMultiVolumeArchiveRoundTrip(t *testing.T) {
 		t.Fatalf("close volumes: %v", err)
 	}
 
-	prefix := main[:len(main)-len(".zip")]
-	if _, err := os.Stat(prefix + ".z01"); err != nil {
+	if _, err := os.Stat(main + ".002"); err != nil {
 		t.Fatalf("the archive did not span more than one volume: %v", err)
 	}
 
