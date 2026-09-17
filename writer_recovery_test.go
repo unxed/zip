@@ -214,15 +214,28 @@ func TestWriterRecovery_Par2EntryCoversTheArchive(t *testing.T) {
 		t.Errorf("the PAR2 stream names %q, want the archive %q", fileDesc.Name, filepath.Base(archivePath))
 	}
 
-	// The recovery data is computed over the archive up to the point the
-	// entry is appended at, so its declared length is where its own local
-	// header starts.
+	// The recovery entry sits between the last entry and the central
+	// directory, and its data covers the archive up to its own local header
+	// followed by the directory, which starts right after its body and ends
+	// at the end of central directory record.
+	cdStart := entry.dataOffset + len(entry.payload)
+	eocd := bytes.LastIndex(raw, []byte("PK\x05\x06"))
+	if eocd < 0 || string(raw[cdStart:cdStart+4]) != "PK\x01\x02" {
+		t.Fatalf("the recovery entry is not followed by the central directory")
+	}
+	if got := int(binary.LittleEndian.Uint32(raw[eocd+16 : eocd+20])); got != cdStart {
+		t.Errorf("the end of central directory record puts the directory at %d, it starts at %d", got, cdStart)
+	}
+	if got := int(binary.LittleEndian.Uint32(raw[eocd+12 : eocd+16])); got != eocd-cdStart {
+		t.Errorf("the end of central directory record says the directory is %d bytes, it is %d: a reader walking it would reach something else", got, eocd-cdStart)
+	}
+	covered := append(append([]byte{}, raw[:entry.headerOffset]...), raw[cdStart:eocd]...)
 	descLen, err := u64toi64(fileDesc.Length)
 	if err != nil {
 		t.Fatalf("PAR2 file length: %v", err)
 	}
-	if descLen != int64(entry.headerOffset) {
-		t.Errorf("the PAR2 stream covers %d bytes but its entry starts at %d: the recovery data is for a different archive than the one it was stored in", descLen, entry.headerOffset)
+	if descLen != int64(len(covered)) {
+		t.Errorf("the PAR2 stream covers %d bytes, want %d: the archive up to the recovery entry and the central directory", descLen, len(covered))
 	}
 
 	// A checksum out of the index, recomputed here, is what says the bytes
@@ -236,7 +249,7 @@ func TestWriterRecovery_Par2EntryCoversTheArchive(t *testing.T) {
 		t.Fatalf("the PAR2 stream has slice size %d and %d checksums", sliceSize, len(ifsc.Checksums))
 	}
 	first := make([]byte, sliceSize)
-	copy(first, raw[:entry.headerOffset])
+	copy(first, covered)
 	if got, want := crc32.ChecksumIEEE(first), binary.LittleEndian.Uint32(ifsc.Checksums[0].CRC32[:]); got != want {
 		t.Errorf("the first slice of the archive checksums to %08x, the index says %08x", got, want)
 	}
@@ -379,6 +392,7 @@ func TestWriterRecovery_WriteErrors(t *testing.T) {
 		{"the recovery entry's header", 1, entry.headerOffset, entry.headerOffset},
 		{"the recovery entry's name", 1, entry.headerOffset + fileHeaderLen, entry.headerOffset + fileHeaderLen},
 		{"the recovery entry's body", 1, entry.dataOffset, entry.dataOffset},
+		{"the central directory behind it", 1, entry.dataOffset + len(entry.payload), entry.dataOffset + len(entry.payload)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			errSink := errors.New("the sink stopped taking bytes")

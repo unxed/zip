@@ -211,6 +211,15 @@ func (w *Writer) Close() error {
 		cdWriter = cdBuf
 	}
 
+	// The recovery entry goes in front of the central directory, and the
+	// recovery data covers the directory too, so the directory is put
+	// together first and written after the entry.
+	recovery := w.recoveryPct > 0 && w.recoveryFile != nil && !w.torrentZip && w.password == ""
+	if recovery {
+		cdBuf = new(bytes.Buffer)
+		cdWriter = cdBuf
+	}
+
 	for _, h := range w.dir {
 		var buf [directoryHeaderLen]byte
 		b := writeBuf(buf[:])
@@ -279,8 +288,19 @@ func (w *Writer) Close() error {
 		w.comment = fmt.Sprintf("TORRENTZIPPED-%08X", cdHasher.Sum32())
 	}
 
-	// Интегрируем генерацию скрытого файла избыточности .recovery.par2 прямо перед CD
-	if w.recoveryPct > 0 && w.recoveryFile != nil && !w.torrentZip && w.password == "" {
+	// The recovery record is a hidden entry, as f4zip.md describes for the
+	// SOZip index: a local header and a stored PAR2 stream, placed after the
+	// last entry and before the central directory, and not listed in the
+	// directory. It used to follow the directory and was counted in the
+	// directory's size, which is where 7-Zip, Info-ZIP UnZip and Python's
+	// zipfile read directory records and found a local header instead; all
+	// three refused the archive. The PAR2 stream covers the archive up to
+	// the entry's local header followed by the central directory, which is
+	// its declared length: the directory holds only the offsets of the
+	// entries before it, so it is the same wherever it lands. The end of
+	// central directory records, which hold the directory's offset, are not
+	// covered.
+	if recovery {
 		// The recovery data is computed from the archive as it is on
 		// disk, so everything written so far has to be there first: a
 		// dropped flush produced recovery data for an earlier version
@@ -294,13 +314,12 @@ func (w *Writer) Close() error {
 			}
 		}
 
+		covered := w.cw.count
 		mvr, totalSize, err := OpenMultiVolume(w.recoveryFile.Name(), os.O_RDONLY)
-		if err == nil {
-			r := io.NewSectionReader(mvr, 0, totalSize)
-			par2Bytes, err := par2.GeneratePAR2Stream(r, totalSize, filepath.Base(w.recoveryFile.Name()), w.recoveryPct)
-			// The volumes were opened read-only to compute the
-			// recovery data and are of no further use.
-			_ = mvr.Close()
+		if err == nil && totalSize >= covered {
+			r := io.MultiReader(io.NewSectionReader(mvr, 0, covered), bytes.NewReader(cdBuf.Bytes()))
+			// #nosec G115 -- the length of a buffer is never negative
+			par2Bytes, err := par2.GeneratePAR2Stream(r, covered+int64(cdBuf.Len()), filepath.Base(w.recoveryFile.Name()), w.recoveryPct)
 			if err == nil && len(par2Bytes) > 0 {
 				fh := &FileHeader{
 					Name:               ".recovery.par2",
@@ -316,6 +335,7 @@ func (w *Writer) Close() error {
 					raw:    true,
 				}
 				if err := writeHeader(w.cw, h); err != nil {
+					_ = mvr.Close()
 					return err
 				}
 				// The entry's header has already been written, so
@@ -324,9 +344,20 @@ func (w *Writer) Close() error {
 				// else -- and the caller was told the archive was
 				// closed successfully.
 				if _, werr := w.cw.Write(par2Bytes); werr != nil {
+					_ = mvr.Close()
 					return werr
 				}
 			}
+		}
+		if mvr != nil {
+			// The volumes were opened read-only to compute the
+			// recovery data and are of no further use.
+			_ = mvr.Close()
+		}
+
+		start = w.cw.count
+		if _, err := w.cw.Write(cdBuf.Bytes()); err != nil {
+			return err
 		}
 	}
 
