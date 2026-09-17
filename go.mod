@@ -4,7 +4,7 @@ go 1.25.5
 
 require (
 	github.com/klauspost/compress v1.19.2
-	github.com/unxed/par2 v0.1.2
+	github.com/unxed/par2 v0.1.3
 	github.com/unxed/xz v0.1.41
 	github.com/unxed/zipcharset v0.1.5
 	github.com/unxed/zlib4go v0.1.16
