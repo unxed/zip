@@ -329,7 +329,8 @@ func (u *Updater) AppendHeader(fh *FileHeader, mode AppendMode) (io.Writer, erro
 		// #nosec G115 -- u.offset is either an entry offset init checked or dirOffset, both of which are inside the archive
 		offset: uint64(u.offset),
 	}
-	if strings.HasSuffix(fh.Name, "/") {
+	isDir := strings.HasSuffix(fh.Name, "/")
+	if isDir {
 		fh.Method = Store
 		fh.Flags &^= 0x8
 
@@ -337,21 +338,29 @@ func (u *Updater) AppendHeader(fh *FileHeader, mode AppendMode) (io.Writer, erro
 		fh.CompressedSize64 = 0
 		fh.UncompressedSize = 0
 		fh.UncompressedSize64 = 0
-
-		ow = dirWriter{}
 	} else {
 		fh.Flags |= 0x8
+	}
 
+	// Every entry gets its local header, a directory as much as a file:
+	// the record the central directory keeps for the entry says where that
+	// header is, and a directory appended without one pointed at whatever
+	// was appended after it, or at the central directory itself. 7-Zip
+	// reads the local header there, finds another entry or none, and
+	// reports a header error for the directory -- the defect
+	// Writer.CreateHeader had and unxed/zipper#16 reported.
+	if err := writeHeader(u.rw, h); err != nil {
+		return nil, err
+	}
+
+	if isDir {
+		ow = dirWriter{}
+	} else {
 		fw = &fileWriter{
 			zipw:      u.rw,
 			compCount: &countWriter{w: u.rw},
 			crc32:     crc32.NewIEEE(),
 			isAES:     fh.Password != "",
-		}
-
-		// 1. Write Header FIRST
-		if err := writeHeader(u.rw, h); err != nil {
-			return nil, err
 		}
 
 		// 2. Init AES/Comp AFTER header
