@@ -410,7 +410,7 @@ func (f *File) Open() (io.ReadCloser, error) {
 		}
 		pass := f.zip.password()
 
-		if f.Method == winzipAesExtraID || f.aesInfo != nil {
+		if isWinZipAesMethod(f.Method) || f.aesInfo != nil {
 			// WinZip AES (Method 99) case
 			var err error
 			rr, method, err = newWinZipAesReader(r, pass, f.aesInfo, size)
@@ -630,7 +630,7 @@ func (f *File) OpenSeekableUnverified() (io.ReadSeeker, error) {
 
 func (f *File) openSeekable(verify bool) (io.ReadSeeker, error) {
 	actualMethod := f.Method
-	if f.Method == winzipAesExtraID && f.aesInfo != nil {
+	if isWinZipAesMethod(f.Method) && f.aesInfo != nil {
 		actualMethod = f.aesInfo.actualMethod
 	}
 
@@ -643,7 +643,7 @@ func (f *File) openSeekable(verify bool) (io.ReadSeeker, error) {
 			if f.zip.password == nil {
 				return nil, errors.New("zip: file is encrypted but no password provided")
 			}
-			if f.Method == winzipAesExtraID || f.aesInfo != nil {
+			if isWinZipAesMethod(f.Method) || f.aesInfo != nil {
 				// #nosec G115 -- readDirectoryHeader and salvage both refuse an entry whose CompressedSize64 is above MaxInt64
 				rawSection := io.NewSectionReader(f.zipr, f.headerOffset+bodyOffset, int64(f.CompressedSize64))
 				// #nosec G115 -- readDirectoryHeader and salvage both refuse an entry whose CompressedSize64 is above MaxInt64
@@ -853,7 +853,7 @@ func (s *solidReadSeeker) Read(p []byte) (int, error) {
 			if s.f.zip.password == nil {
 				return 0, errors.New("zip: file is encrypted but no password provided")
 			}
-			if s.f.Method == winzipAesExtraID || s.f.aesInfo != nil {
+			if isWinZipAesMethod(s.f.Method) || s.f.aesInfo != nil {
 				if s.aesRA == nil {
 					rawSection := io.NewSectionReader(s.f.zipr, s.f.headerOffset+bodyOffset, totalCompSize)
 					aesRA, err := newWinZipAesReaderAt(rawSection, s.f.zip.password(), s.f.aesInfo, totalCompSize, s.verify)
@@ -976,7 +976,7 @@ func (r *checksumReader) Read(b []byte) (n int, err error) {
 		if r.nread != r.f.UncompressedSize64 {
 			return 0, encryptedDataError(r.f, io.ErrUnexpectedEOF)
 		}
-		if r.f.Method == winzipAesExtraID {
+		if isWinZipAesMethod(r.f.Method) {
 			if _, macErr := io.Copy(io.Discard, r.rr); macErr != nil {
 				err = macErr
 			} else {
@@ -1223,18 +1223,12 @@ parseExtras:
 				f.Created = time.Unix(int64(fieldBuf.uint32()), 0)
 			}
 		case winzipAesExtraID:
-			if len(fieldBuf) < 7 {
+			info, ok := parseWinZipAesExtra(fieldBuf)
+			if !ok {
 				continue parseExtras
 			}
-			f.aesInfo = &winzipAesInfo{
-				version:      fieldBuf.uint16(),
-				strength:     fieldBuf.uint8(), // fieldBuf.uint8() will move the pointer
-				actualMethod: 0,                // will be set below
-			}
-			// Skip Vendor ID "AE" (2 bytes)
-			fieldBuf.uint16()
-			// The actual compression method
-			f.aesInfo.actualMethod = fieldBuf.uint16()
+			info.winzipCounter = f.Method == winzipAesMethod
+			f.aesInfo = &info
 
 		case xattrExtraID:
 			if f.Xattrs == nil {

@@ -104,8 +104,8 @@ func TestWinZipAES_FullCycle(t *testing.T) {
 	zr.SetPassword(password)
 
 	f := zr.File[0]
-	if f.Method != winzipAesExtraID {
-		t.Errorf("expected method %d (AES), got %d", winzipAesExtraID, f.Method)
+	if f.Method != winzipAesMethod {
+		t.Errorf("expected method %d (AES), got %d", winzipAesMethod, f.Method)
 	}
 
 	rc, err := f.Open()

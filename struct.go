@@ -79,6 +79,44 @@ const (
 	winzipAesExtraID = 0x9901 // WinZip AES encryption extra field
 )
 
+// winzipAesMethod is the compression method code that marks an entry as
+// WinZip AES encrypted, used together with the 0x9901 extra field that holds
+// the method the data was actually compressed with (APPNOTE 4.4.5 and
+// APPENDIX E; WinZip AES specification, section II.B).
+const winzipAesMethod = 99
+
+// isWinZipAesMethod reports whether an entry's method code marks it as
+// WinZip AES. Besides 99 it accepts 0x9901, the extra field ID, which this
+// package wrote into the method field of the entries it encrypted before
+// it wrote 99: those archives still have to open.
+func isWinZipAesMethod(method uint16) bool {
+	return method == winzipAesMethod || method == winzipAesExtraID
+}
+
+// parseWinZipAesExtra reads the payload of a 0x9901 extra field. The
+// specification lays it out as vendor version (2 bytes), vendor ID "AE"
+// (2 bytes), strength (1 byte), actual compression method (2 bytes), and
+// allows the payload to grow past 7 bytes. This package used to write the
+// strength before the vendor ID; the two layouts are told apart by where
+// "AE" stands, since a strength is never the byte 'A'. A payload with "AE"
+// in neither place is not a WinZip AES field.
+func parseWinZipAesExtra(b []byte) (info winzipAesInfo, ok bool) {
+	if len(b) < 7 {
+		return winzipAesInfo{}, false
+	}
+	info.version = binary.LittleEndian.Uint16(b[0:2])
+	info.actualMethod = binary.LittleEndian.Uint16(b[5:7])
+	switch {
+	case b[2] == 'A' && b[3] == 'E':
+		info.strength = b[4]
+	case b[3] == 'A' && b[4] == 'E':
+		info.strength = b[2]
+	default:
+		return winzipAesInfo{}, false
+	}
+	return info, true
+}
+
 // Abstraction hooks for NTFS security and stream operations to support unit testing on non-Windows platforms.
 var (
 	getFileSecurityFunc           = getFileSecurity
@@ -308,7 +346,7 @@ func validateExtra(extra []byte) error {
 func (fh *FileHeader) injectAutoExtras() uint16 {
 	// 1. Handle Method 99 (AES) recovery and idempotency
 	originalMethod := fh.Method
-	if fh.Method == winzipAesExtraID {
+	if isWinZipAesMethod(fh.Method) {
 		// Already injected, try to recover original method from extra field
 		for eb := readBuf(fh.Extra); len(eb) >= 4; {
 			tag := eb.uint16()
@@ -316,11 +354,10 @@ func (fh *FileHeader) injectAutoExtras() uint16 {
 			if len(eb) < size {
 				break
 			}
-			if tag == winzipAesExtraID && size >= 7 {
-				eb.uint16() // version
-				eb.uint8()  // strength
-				eb.uint16() // vendor
-				originalMethod = eb.uint16()
+			if tag == winzipAesExtraID {
+				if info, ok := parseWinZipAesExtra(eb[:size]); ok {
+					originalMethod = info.actualMethod
+				}
 				break
 			}
 			eb = eb[size:]
@@ -466,18 +503,23 @@ func (fh *FileHeader) injectAutoExtras() uint16 {
 	}
 
 	// 4. AES Encryption (0x9901)
-	if fh.Password != "" && fh.Method != winzipAesExtraID {
+	//
+	// A directory holds no data to encrypt and is left unmarked, as the
+	// WinZip AES specification recommends (section V.A) and as 7-Zip writes
+	// it; a zero-length file is encrypted like any other.
+	if fh.Password != "" && !isWinZipAesMethod(fh.Method) && !strings.HasSuffix(fh.Name, "/") {
 		fh.Flags |= 0x1 // Set Encryption bit
 		if fh.AESStrength == 0 {
 			fh.AESStrength = 3
 		}
-		fh.Method = winzipAesExtraID
+		fh.Method = winzipAesMethod
 		buf := make([]byte, 11)
 		binary.LittleEndian.PutUint16(buf[0:2], winzipAesExtraID)
 		binary.LittleEndian.PutUint16(buf[2:4], 7)
-		binary.LittleEndian.PutUint16(buf[4:6], 2) // AE-2
-		buf[6] = fh.AESStrength
-		binary.LittleEndian.PutUint16(buf[7:9], 0x4541)
+		binary.LittleEndian.PutUint16(buf[4:6], 2) // vendor version: AE-2
+		// vendor ID
+		buf[6], buf[7] = 'A', 'E'
+		buf[8] = fh.AESStrength
 		binary.LittleEndian.PutUint16(buf[9:11], originalMethod)
 		fh.Extra = append(fh.Extra, buf...)
 	}

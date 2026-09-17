@@ -1,6 +1,7 @@
 package zip
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"hash/crc32"
@@ -785,7 +786,7 @@ func (a *Archiver) createHardlink(fi os.FileInfo, hdr *FileHeader) error {
 	a.m.Lock()
 	defer a.m.Unlock()
 	hdr.Flags &= ^uint16(0x8)
-	_, err := a.createHeaderRaw(fi, hdr)
+	err := a.writeRawEntry(fi, hdr, nil)
 	incOnSuccess(&a.entries, err)
 	return err
 }
@@ -794,8 +795,71 @@ func (a *Archiver) createSpecialFile(fi os.FileInfo, hdr *FileHeader) error {
 	a.m.Lock()
 	defer a.m.Unlock()
 	hdr.Flags &= ^uint16(0x8)
-	_, err := a.createHeaderRaw(fi, hdr)
+	err := a.writeRawEntry(fi, hdr, nil)
 	incOnSuccess(&a.entries, err)
+	return err
+}
+
+// writeRawEntry writes an entry whose whole body the archiver has in hand --
+// the target of a symlink, or nothing at all for a hard link or a special
+// file -- stored, without a data descriptor, under hdr as its caller set it.
+//
+// Such an entry goes through CreateRaw and so misses the compressor and the
+// cipher every file passes through, while the header CreateRaw writes still
+// promises both: torrentzip labels every entry Deflate, and a password marks
+// it WinZip AES, whose body is salt, password verifier, ciphertext and
+// authentication code even when there is no data (WinZip AES specification,
+// sections III.A and V.A). Written as it came, the body was a deflate stream
+// no inflater accepts, or an AES entry too short to hold its own
+// authentication code; 7-Zip, Info-ZIP and this package's reader all refused
+// them. The body is therefore encoded here the way the header describes it.
+func (a *Archiver) writeRawEntry(fi os.FileInfo, hdr *FileHeader, body []byte) error {
+	// #nosec G115 -- the length of a slice is never negative
+	hdr.UncompressedSize64 = uint64(len(body))
+
+	encoded := body
+	switch {
+	case a.options.torrentZip && len(body) == 0:
+		// The empty deflate stream compressFile writes for an empty file.
+		encoded = []byte{0x03, 0x00}
+	case a.options.torrentZip:
+		// Deflate always has a compressor: the one torrentzip registers,
+		// or the package's own.
+		var buf bytes.Buffer
+		cw, err := a.zw.compressor(Deflate)(&buf)
+		if err != nil {
+			return err
+		}
+		// The stream goes to memory, which takes every byte, so neither
+		// call has a failure to report.
+		_, _ = cw.Write(body)
+		_ = cw.Close()
+		encoded = buf.Bytes()
+	case hdr.Password != "":
+		strength := hdr.AESStrength
+		if strength == 0 {
+			strength = 3
+		}
+		var buf bytes.Buffer
+		aesW, err := newWinZipAesWriter(&buf, hdr.Password, strength, true)
+		if err != nil {
+			return err
+		}
+		// As above: memory takes every byte.
+		_, _ = aesW.Write(body)
+		_ = aesW.Close()
+		encoded = buf.Bytes()
+		// AE-2, as every other entry this package encrypts: the
+		// authentication code stands in for the CRC.
+		hdr.CRC32 = 0
+	}
+	// #nosec G115 -- the length of a slice is never negative
+	hdr.CompressedSize64 = uint64(len(encoded))
+
+	w, err := a.createHeaderRaw(fi, hdr)
+	if err == nil {
+		_, err = w.Write(encoded)
+	}
 	return err
 }
 
@@ -810,16 +874,9 @@ func (a *Archiver) createSymlink(path string, fi os.FileInfo, hdr *FileHeader) e
 
 	hdr.Flags &= ^uint16(0x8)
 	hdr.Method = Store
-	hdr.CompressedSize64 = uint64(len(link))
-	hdr.UncompressedSize64 = hdr.CompressedSize64
 	hdr.CRC32 = crc32.ChecksumIEEE([]byte(link))
 
-	w, err := a.createHeaderRaw(fi, hdr)
-	if err != nil {
-		return err
-	}
-
-	_, err = io.WriteString(w, link)
+	err = a.writeRawEntry(fi, hdr, []byte(link))
 	incOnSuccess(&a.entries, err)
 	return err
 }
@@ -921,7 +978,7 @@ func (a *Archiver) compressFile(ctx context.Context, r io.ReadSeeker, fi os.File
 			strength = 3
 		}
 		var err error
-		aesW, err = newWinZipAesWriter(tmp, hdr.Password, strength)
+		aesW, err = newWinZipAesWriter(tmp, hdr.Password, strength, true)
 		if err != nil {
 			return err
 		}

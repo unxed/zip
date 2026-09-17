@@ -7,6 +7,8 @@ import (
 	"crypto/rand"
 	// #nosec G505 -- WinZip AES (APPNOTE 6.3.x) requires PBKDF2-HMAC-SHA1 and an HMAC-SHA1 authentication code; changing the algorithm breaks the format
 	"crypto/sha1"
+	"crypto/subtle"
+	"encoding/binary"
 	"errors"
 	"hash"
 	"io"
@@ -19,6 +21,62 @@ type winzipAesInfo struct {
 	version      uint16
 	strength     byte // 1=128, 2=192, 3=256
 	actualMethod uint16
+	// winzipCounter is set for an entry marked with method 99, whose CTR
+	// counter runs as the WinZip AES specification has it; see
+	// aesCTRStream. Unset is the counter this package used for the
+	// entries it marked 0x9901, and still uses for the central directory
+	// it encrypts.
+	winzipCounter bool
+}
+
+// aesCTRStream returns the keystream for the data of an AES entry, starting
+// at the given 16 byte block of it.
+//
+// WinZip AES counts blocks with a little-endian counter that starts at 1:
+// Brian Gladman's fcrypt, which the specification names, and 7-Zip
+// (AesCtr_Code increments the low word first) both run it that way. This
+// package set the same starting value but handed it to crypto/cipher's CTR,
+// which increments from the last byte, so its keystream agreed with WinZip's
+// for the first block only: past the sixteenth byte every entry it wrote
+// decrypted to something else in 7-Zip, and every entry 7-Zip wrote
+// decrypted to something else here, with no error on either side, since the
+// authentication code covers the ciphertext and AE-2 stores no CRC. That
+// counter stays for what this package wrote with it.
+func aesCTRStream(block cipher.Block, winzipCounter bool, blockIndex uint64) cipher.Stream {
+	if winzipCounter {
+		s := &winzipCTR{block: block, used: aes.BlockSize}
+		binary.LittleEndian.PutUint64(s.counter[:8], blockIndex+1)
+		return s
+	}
+	iv := make([]byte, aes.BlockSize)
+	iv[0] = 1
+	return cipher.NewCTR(block, addIVBigEndian(iv, blockIndex))
+}
+
+// winzipCTR is AES in counter mode with a 128-bit little-endian counter.
+type winzipCTR struct {
+	block     cipher.Block
+	counter   [aes.BlockSize]byte
+	keystream [aes.BlockSize]byte
+	used      int // bytes of keystream already consumed
+}
+
+func (s *winzipCTR) XORKeyStream(dst, src []byte) {
+	for len(src) > 0 {
+		if s.used == len(s.keystream) {
+			s.block.Encrypt(s.keystream[:], s.counter[:])
+			for i := range s.counter {
+				s.counter[i]++
+				if s.counter[i] != 0 {
+					break
+				}
+			}
+			s.used = 0
+		}
+		n := subtle.XORBytes(dst, src, s.keystream[s.used:])
+		s.used += n
+		dst, src = dst[n:], src[n:]
+	}
 }
 
 type aesReader struct {
@@ -95,14 +153,7 @@ func newWinZipAesReader(r io.Reader, password string, info *winzipAesInfo, compr
 	// no cipher here that could fail to be made.
 	block, _ := aes.NewCipher(encKey)
 
-	// WinZip AES uses CTR mode with IV=1 (per 16-byte blocks)
-	iv := make([]byte, 16)
-	for i := range iv {
-		iv[i] = 0
-	}
-	iv[0] = 1
-
-	decrypter := cipher.NewCTR(block, iv)
+	decrypter := aesCTRStream(block, info.winzipCounter, 0)
 
 	// Limit the reader to avoid overrunning onto the HMAC (10 bytes at the end)
 	dataSize := compressedSize - int64(saltLen) - 2 - 10
@@ -134,11 +185,11 @@ func addIVBigEndian(baseIV []byte, offset uint64) []byte {
 }
 
 type winZipAesReaderAt struct {
-	r          io.ReaderAt
-	baseOffset int64
-	encKey     []byte
-	limit      int64
-	iv         []byte
+	r             io.ReaderAt
+	baseOffset    int64
+	encKey        []byte
+	limit         int64
+	winzipCounter bool
 }
 
 // verifyWinZipAesCode checks the authentication code an entry carries behind
@@ -232,18 +283,12 @@ func newWinZipAesReaderAt(r io.ReaderAt, password string, info *winzipAesInfo, c
 		}
 	}
 
-	iv := make([]byte, 16)
-	for i := range iv {
-		iv[i] = 0
-	}
-	iv[0] = 1
-
 	return &winZipAesReaderAt{
-		r:          r,
-		baseOffset: int64(saltLen + 2),
-		encKey:     encKey,
-		limit:      limit,
-		iv:         iv,
+		r:             r,
+		baseOffset:    int64(saltLen + 2),
+		encKey:        encKey,
+		limit:         limit,
+		winzipCounter: info.winzipCounter,
 	}, nil
 }
 
@@ -278,9 +323,7 @@ func (ar *winZipAesReaderAt) ReadAt(p []byte, off int64) (int, error) {
 		return 0, errC
 	}
 
-	ctrIV := addIVBigEndian(ar.iv, blockOffset)
-
-	stream := cipher.NewCTR(block, ctrIV)
+	stream := aesCTRStream(block, ar.winzipCounter, blockOffset)
 	decBuf := make([]byte, n)
 	stream.XORKeyStream(decBuf, encBuf)
 
@@ -300,7 +343,11 @@ type aesWriter struct {
 	buf       []byte
 }
 
-func newWinZipAesWriter(w io.Writer, password string, strength byte) (io.WriteCloser, error) {
+// newWinZipAesWriter starts the body of an AES entry: salt and password
+// verifier, then ciphertext, then the authentication code on Close.
+// winzipCounter picks the CTR counter; an entry marked method 99 has to be
+// written with it set (see aesCTRStream).
+func newWinZipAesWriter(w io.Writer, password string, strength byte, winzipCounter bool) (io.WriteCloser, error) {
 	var keyLen, saltLen int
 	switch strength {
 	case 1:
@@ -334,13 +381,7 @@ func newWinZipAesWriter(w io.Writer, password string, strength byte) (io.WriteCl
 	// the reader above.
 	block, _ := aes.NewCipher(encKey)
 
-	iv := make([]byte, 16)
-	for i := range iv {
-		iv[i] = 0
-	}
-	iv[0] = 1
-
-	decrypter := cipher.NewCTR(block, iv)
+	decrypter := aesCTRStream(block, winzipCounter, 0)
 
 	return &aesWriter{
 		w:         w,

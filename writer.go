@@ -334,7 +334,7 @@ func (w *Writer) Close() error {
 		// Now encrypt the accumulated central directory buffer
 		// Use AES-256 (strength 3) for CDE
 		var err error
-		aesW, err = newWinZipAesWriter(w.cw, w.password, 3)
+		aesW, err = newWinZipAesWriter(w.cw, w.password, 3, false)
 		if err != nil {
 			return err
 		}
@@ -593,7 +593,7 @@ func (w *Writer) CreateHeader(fh *FileHeader) (io.Writer, error) {
 		if fw.isAES {
 			var err error
 			// This call writes Salt/Verif bytes to w.cw via compCount.
-			fw.aesW, err = newWinZipAesWriter(fw.compCount, fh.Password, fh.AESStrength)
+			fw.aesW, err = newWinZipAesWriter(fw.compCount, fh.Password, fh.AESStrength, true)
 			if err != nil {
 				return nil, err
 			}

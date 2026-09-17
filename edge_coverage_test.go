@@ -54,7 +54,7 @@ func TestWinZipAes_Edge(t *testing.T) {
 	}
 
 	// То же для Writer
-	_, err = newWinZipAesWriter(new(bytes.Buffer), "pass", 99)
+	_, err = newWinZipAesWriter(new(bytes.Buffer), "pass", 99, false)
 	if err == nil || err.Error() != "zip: unknown AES strength" {
 		t.Errorf("expected unknown strength error for Writer, got %v", err)
 	}

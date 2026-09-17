@@ -358,7 +358,7 @@ func (u *Updater) AppendHeader(fh *FileHeader, mode AppendMode) (io.Writer, erro
 		var sink io.Writer = fw.compCount
 		if fw.isAES {
 			var err error
-			fw.aesW, err = newWinZipAesWriter(fw.compCount, fh.Password, fh.AESStrength)
+			fw.aesW, err = newWinZipAesWriter(fw.compCount, fh.Password, fh.AESStrength, true)
 			if err != nil {
 				return nil, err
 			}

@@ -661,7 +661,6 @@ func TestRegisterCovAesReaderAtFailures(t *testing.T) {
 			baseOffset: 18,
 			encKey:     make([]byte, 32),
 			limit:      32,
-			iv:         make([]byte, 16),
 		}
 		if _, err := ar.ReadAt(make([]byte, 4), 0); !errors.Is(err, errRegisterCovRead) {
 			t.Errorf("got error %v, want the read failure", err)
@@ -674,7 +673,6 @@ func TestRegisterCovAesReaderAtFailures(t *testing.T) {
 			baseOffset: 18,
 			encKey:     make([]byte, 17),
 			limit:      32,
-			iv:         make([]byte, 16),
 		}
 		if _, err := ar.ReadAt(make([]byte, 4), 0); err == nil {
 			t.Error("a seventeen byte key was accepted")
@@ -691,7 +689,7 @@ func TestRegisterCovAesWriter(t *testing.T) {
 
 	t.Run("a 192 bit round trip", func(t *testing.T) {
 		buf := new(bytes.Buffer)
-		wc, err := newWinZipAesWriter(buf, password, 2)
+		wc, err := newWinZipAesWriter(buf, password, 2, false)
 		if err != nil {
 			t.Fatalf("build the writer: %v", err)
 		}
@@ -722,7 +720,7 @@ func TestRegisterCovAesWriter(t *testing.T) {
 	t.Run("no room for the verification value", func(t *testing.T) {
 		// The salt goes out first; the device fills up right behind it.
 		_, saltLen := RegisterCovAesParams(t, 3)
-		wc, err := newWinZipAesWriter(&RegisterCovShortWriter{budget: saltLen}, password, 3)
+		wc, err := newWinZipAesWriter(&RegisterCovShortWriter{budget: saltLen}, password, 3, false)
 		if !errors.Is(err, errRegisterCovWrite) {
 			t.Fatalf("got error %v, want the write failure", err)
 		}
@@ -733,7 +731,7 @@ func TestRegisterCovAesWriter(t *testing.T) {
 
 	t.Run("no randomness for the salt", func(t *testing.T) {
 		RegisterCovUseRandom(t, RegisterCovEmptyRandom{})
-		wc, err := newWinZipAesWriter(new(bytes.Buffer), password, 3)
+		wc, err := newWinZipAesWriter(new(bytes.Buffer), password, 3, false)
 		if err == nil {
 			t.Fatal("an entry was salted without any randomness")
 		}
