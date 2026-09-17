@@ -79,6 +79,27 @@ func TestUnixLinks_Zip(t *testing.T) {
 		t.Logf("[DIAGNOSTIC ZIP] Failed to open reader for check: %v", errCheck)
 	}
 
+	// Whichever of the two names the archiver reached second is the hard
+	// link, and that entry alone carries the attribute bit fuse-zip and
+	// mount-zip need before they resolve its 0x000d name as a link.
+	zr, err := OpenReader(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeAt(t, zr)
+	links := 0
+	for _, f := range zr.File {
+		if f.Linkname != "" {
+			links++
+		}
+		if marked := f.ExternalAttrs&pkwareHardLinkAttr != 0; marked != (f.Linkname != "") {
+			t.Errorf("%s: hard link flag is %v with link target %q (external attributes %#08x)", f.Name, marked, f.Linkname, f.ExternalAttrs)
+		}
+	}
+	if links != 1 {
+		t.Errorf("%d entries are hard links, want 1", links)
+	}
+
 	dstDir := filepath.Join(tmpDir, "dst")
 	e, err := NewExtractor(archivePath, dstDir)
 	if err != nil {

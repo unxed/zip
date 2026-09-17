@@ -420,6 +420,12 @@ func (fh *FileHeader) injectAutoExtras() uint16 {
 	if (fh.Linkname != "" || fh.Mode()&(fs.ModeDevice|fs.ModeCharDevice) != 0) && !hasTag(unixExtraID) {
 		fh.Extra = appendUnix000dExtra(fh.Extra, fh)
 	}
+	// The flag goes on only once the tag is there: a flagged entry whose
+	// target was left out for being too long is a link to nothing, while
+	// the same entry unflagged is still an empty file.
+	if fh.marksHardLink() && hasTag(unixExtraID) {
+		fh.ExternalAttrs |= pkwareHardLinkAttr
+	}
 
 	// 3.2 Xattrs (0x7811)
 	if len(fh.Xattrs) > 0 && !hasTag(xattrExtraID) {

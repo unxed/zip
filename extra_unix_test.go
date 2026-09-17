@@ -1,6 +1,7 @@
 package zip
 
 import (
+	"bytes"
 	"encoding/binary"
 	"io/fs"
 	"math"
@@ -258,6 +259,77 @@ func TestAppendUnix000dExtraLinkname(t *testing.T) {
 	plain.SetMode(0600)
 	if extra := appendUnix000dExtra(nil, plain); extra != nil {
 		t.Errorf("a plain file got a %d-byte 0x000d tag", len(extra))
+	}
+}
+
+// TestHardLinkAttr covers the attribute bit fuse-zip and mount-zip need before
+// they take the name in an entry's 0x000d tag for a hard link, read back out of
+// the central directory the way they read it: set on a hard link made on Unix,
+// and left off every entry that is not one, whose tag holds something other
+// than a link name, or whose low attribute word means something else.
+func TestHardLinkAttr(t *testing.T) {
+	unixEntry := func(name, linkname string, mode fs.FileMode) func() *FileHeader {
+		return func() *FileHeader {
+			h := &FileHeader{Name: name, Linkname: linkname}
+			h.SetMode(mode)
+			return h
+		}
+	}
+	tests := []struct {
+		name     string
+		hdr      func() *FileHeader
+		wantFlag bool
+	}{
+		{"hard link to a regular file", unixEntry("hard.txt", "target.txt", 0644), true},
+		{"hard link to a fifo", unixEntry("hard.fifo", "target.fifo", fs.ModeNamedPipe|0644), true},
+		{"regular file", unixEntry("plain.txt", "", 0644), false},
+		{"symlink", unixEntry("sym", "target.txt", fs.ModeSymlink|0777), false},
+		{"character device", unixEntry("tty", "tty0", fs.ModeDevice|fs.ModeCharDevice|0600), false},
+		{"target too long for the tag", unixEntry("hard.txt", strings.Repeat("a", uint16max-11), 0644), false},
+		{"entry made on NTFS", func() *FileHeader {
+			return &FileHeader{
+				Name:           "hard.txt",
+				Linkname:       "target.txt",
+				CreatorVersion: creatorNTFS << 8,
+				ExternalAttrs:  0x20,
+			}
+		}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			hdr := tc.hdr()
+			hdr.Method = Store
+			wantMode := hdr.Mode()
+
+			var buf bytes.Buffer
+			zw := NewWriter(&buf)
+			if _, err := zw.CreateHeader(hdr); err != nil {
+				t.Fatal(err)
+			}
+			if err := zw.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			zr, err := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(zr.File) != 1 {
+				t.Fatalf("the archive holds %d entries, want 1", len(zr.File))
+			}
+			f := zr.File[0]
+			if got := f.ExternalAttrs&pkwareHardLinkAttr != 0; got != tc.wantFlag {
+				t.Errorf("hard link flag is %v, want %v (external attributes %#08x)", got, tc.wantFlag, f.ExternalAttrs)
+			}
+			if tc.wantFlag && f.Linkname != hdr.Linkname {
+				t.Errorf("a flagged entry reads back with link target %q, want %q", f.Linkname, hdr.Linkname)
+			}
+			// On a Unix entry the bit lies outside the word the mode is
+			// read from, so it changes nothing about what the entry is.
+			if got := f.Mode(); got != wantMode {
+				t.Errorf("mode reads back as %v, want %v", got, wantMode)
+			}
+		})
 	}
 }
 

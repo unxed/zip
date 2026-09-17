@@ -22,6 +22,33 @@ func appendUnixExtra(extra []byte, uid, gid int) []byte {
 	return append(extra, buf[:]...)
 }
 
+// pkwareHardLinkAttr is the bit in the low word of the external file
+// attributes that fuse-zip and mount-zip read as PKZIP's hard link flag: on an
+// entry that has it they resolve the name in its 0x000d tag as the file it is
+// a hard link to, and any other entry is the empty regular file its mode and
+// size describe. APPNOTE 6.3.10 does not define the bit: 4.4.15 leaves the
+// attributes to the host system, and 4.5.7 gives the tag one field for the
+// target of "hard or symbolic links" with nothing to say which.
+const pkwareHardLinkAttr = 0x800
+
+// marksHardLink reports whether the entry is a hard link that is to carry
+// pkwareHardLinkAttr. The low word holds MS-DOS attributes on FAT and NTFS
+// hosts, where 0x800 is FILE_ATTRIBUTE_COMPRESSED and 7-Zip takes the word for
+// Windows attributes, so only an entry made on Unix gets it. A device's 0x000d
+// tag holds its device number rather than a name, and a symlink's target is
+// its body, which is how this package reads both back, so neither is flagged;
+// fuse-zip ignores the bit on devices too.
+func (h *FileHeader) marksHardLink() bool {
+	if h.Linkname == "" || h.CreatorVersion>>8 != creatorUnix {
+		return false
+	}
+	switch h.Mode().Type() {
+	case 0, fs.ModeNamedPipe, fs.ModeSocket:
+		return true
+	}
+	return false
+}
+
 // appendUnix000dExtra writes the 0x000d tag, which carries either a link
 // target or a device number. Its length, like every extra field's, is two
 // bytes of the header, so a link target longer than that leaves the tag out

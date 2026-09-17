@@ -79,12 +79,12 @@ Encodes Windows NT Security Descriptors (ACLs) to preserve file security permiss
 - **OS Dependency:** This field is written and read natively on Windows using APIs like `GetFileSecurityW` and `SetFileSecurityW`. On non-Windows platforms, it SHOULD be preserved within the extra fields during copy operations but is typically ignored on extraction.
 
 ### 2.7. Hardlinks and Special Device Files (Extra Field `0x000d` Extension)
-Extends the standard Info-ZIP UNIX extra field `0x000d` to preserve POSIX hardlink targets and special device nodes (character devices, block devices, and named pipes/FIFOs).
+Extends the standard PKWARE UNIX extra field `0x000d` (APPNOTE 4.5.7) to preserve POSIX hardlink targets and special device nodes (character devices, block devices, and named pipes/FIFOs).
 
 **Header ID:** `0x000d`
 **Data Layout:**
 The standard `0x000d` extra block header is followed by a variable data payload:
-- **Hardlinks:** If the entry represents a hardlink, the payload contains the relative path to the target file.
+- **Hardlinks:** If the entry represents a hardlink, the payload contains the relative path to the target file, and bit `0x800` is set in the low-order word of the entry's external file attributes. APPNOTE does not define this bit; it is what fuse-zip and mount-zip read as PKZIP's hard link flag, and they resolve the payload as a hardlink target only when it is set. The bit is written only on entries whose "version made by" host is UNIX, where readers such as 7-Zip, Info-ZIP UnZip and libarchive take the mode from the high-order word alone; on MS-DOS and NTFS hosts the low-order word holds Windows attributes, in which `0x800` means "compressed". It is not set on symlinks, directories or device nodes.
 - **Device Nodes:** If the entry represents a block or character device, the payload is an 8-byte block containing:
   - `[DevMajor]`: 4 bytes (Little Endian)
   - `[DevMinor]`: 4 bytes (Little Endian)
@@ -97,12 +97,12 @@ Encodes Windows NT Security Descriptors (ACLs) to preserve file security permiss
 - `[SecurityDescriptor]`: Variable length raw binary representing the Windows Security Descriptor.
 
 ### 2.9 Hardlinks and Special Device Files (Extra Field `0x000d` Extension)
-Extends the standard Info-ZIP UNIX extra field `0x000d` to preserve POSIX hardlink targets and special device nodes (character devices, block devices, and named pipes/FIFOs).
+Extends the standard PKWARE UNIX extra field `0x000d` (APPNOTE 4.5.7) to preserve POSIX hardlink targets and special device nodes (character devices, block devices, and named pipes/FIFOs).
 
 **Header ID:** `0x000d`
 **Data Layout:**
 The standard `0x000d` extra block header is followed by a variable data payload:
-- **Hardlinks:** If the entry represents a hardlink, the payload contains the relative path to the target file.
+- **Hardlinks:** If the entry represents a hardlink, the payload contains the relative path to the target file, and bit `0x800` is set in the low-order word of the entry's external file attributes. APPNOTE does not define this bit; it is what fuse-zip and mount-zip read as PKZIP's hard link flag, and they resolve the payload as a hardlink target only when it is set. The bit is written only on entries whose "version made by" host is UNIX, where readers such as 7-Zip, Info-ZIP UnZip and libarchive take the mode from the high-order word alone; on MS-DOS and NTFS hosts the low-order word holds Windows attributes, in which `0x800` means "compressed". It is not set on symlinks, directories or device nodes.
 - **Device Nodes:** If the entry represents a block or character device, the payload is an 8-byte block containing:
   - `[DevMajor]`: 4 bytes (Little Endian)
   - `[DevMinor]`: 4 bytes (Little Endian)
