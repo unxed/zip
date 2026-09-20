@@ -1210,3 +1210,41 @@ func TestExtractorCovSynthesizeParentsCannotReplaceABlockingFile(t *testing.T) {
 		t.Errorf("the file in the way is still there: %v", serr)
 	}
 }
+
+func TestExtractorCovEntryConflictIsDecidedByTheListing(t *testing.T) {
+	// The archive holds `blocker` as a file and something below it. That is an
+	// error whichever entry comes first, and however quickly the workers get
+	// to the file: it does not depend on what is on the disk by then.
+	for _, order := range [][]string{
+		{"blocker", "blocker/sub/deep.txt"},
+		{"blocker/sub/deep.txt", "blocker"},
+	} {
+		entries := make([]extractorCovEntry, 0, len(order))
+		for _, name := range order {
+			entries = append(entries, extractorCovEntry{name: name, data: []byte("x")})
+		}
+		for i := 0; i < 50; i++ {
+			if _, err := extractorCovExtract(t, extractorCovArchive(t, entries...)); err == nil {
+				t.Fatalf("%v: a name below a file of the same archive was reported as extracted", order)
+			}
+		}
+	}
+}
+
+func TestExtractorCovEntryConflictTolerantSkipsOnlyTheConflict(t *testing.T) {
+	raw := extractorCovArchive(t,
+		extractorCovEntry{name: "blocker", data: []byte("file")},
+		extractorCovEntry{name: "blocker/sub/deep.txt", data: []byte("x")},
+		extractorCovEntry{name: "other.txt", data: []byte("kept")},
+	)
+	dst, err := extractorCovExtract(t, raw, WithExtractorTolerant(true))
+	if err != nil {
+		t.Fatalf("tolerant extraction failed: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dst, "other.txt")); err != nil || string(got) != "kept" {
+		t.Fatalf("other.txt = %q, %v; want it extracted", got, err)
+	}
+	if fi, err := os.Stat(filepath.Join(dst, "blocker")); err != nil || !fi.Mode().IsRegular() {
+		t.Fatalf("blocker = %v, %v; want the file left as it was", fi, err)
+	}
+}
