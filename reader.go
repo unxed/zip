@@ -279,6 +279,7 @@ func (r *Reader) init(rdr io.ReaderAt, size int64) error {
 	// is why files stored in earlier volumes read back as garbage.
 	if starts := r.volumeStarts; len(starts) > 1 && (end.diskNbr > 0 || end.dirDiskNbr > 0) {
 		if start, ok := volumeStart(starts, end.dirDiskNbr); ok {
+			// #nosec G115 -- a directory offset that does not fit int64 makes off negative, which the bounds check below rejects
 			if off := start + int64(end.directoryOffset); off >= 0 && off < size && hasDirectoryHeader(rdr, off) {
 				r.splitStarts = starts
 				r.baseOffset = start
@@ -1813,6 +1814,7 @@ func (d *openDir) ReadDir(count int) ([]fs.DirEntry, error) {
 
 // volumeStart returns where volume number disk begins in the joined stream.
 func volumeStart(starts []int64, disk uint32) (int64, bool) {
+	// #nosec G115 -- the number of volumes is far below 2^32
 	if disk >= uint32(len(starts)) {
 		return 0, false
 	}
