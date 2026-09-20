@@ -942,7 +942,11 @@ func (a *Archiver) compressFile(ctx context.Context, r io.ReadSeeker, fi os.File
 			store, huffmanOnly := analyzeBlock(peekBuf[:n])
 			if store {
 				hdr.Method = Store
-			} else if huffmanOnly {
+			} else if huffmanOnly && a.options.level == 1 {
+				// The shortcut was written for BestSpeed, where LZ77 costs more
+				// than it saves on short text. At the default and higher levels
+				// it threw away the matches a text is made of: 120 KB of prose
+				// came out at ~72% instead of ~25% (f4 #1243).
 				hdr.Level = -2 // flate.HuffmanOnly
 			}
 		}
