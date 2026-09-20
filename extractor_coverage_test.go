@@ -1248,3 +1248,22 @@ func TestExtractorCovEntryConflictTolerantSkipsOnlyTheConflict(t *testing.T) {
 		t.Fatalf("blocker = %v, %v; want the file left as it was", fi, err)
 	}
 }
+
+func TestExtractorCovEntryConflictDirectoryOfAFilesName(t *testing.T) {
+	// The archive holds `thing` as a file and `thing/` as a directory. The
+	// directory is the entry that cannot be written, whichever comes first.
+	for _, order := range [][]extractorCovEntry{
+		{
+			{name: "thing", data: []byte("file")},
+			{name: "thing/", mode: fs.ModeDir | 0o755},
+		},
+		{
+			{name: "thing/", mode: fs.ModeDir | 0o755},
+			{name: "thing", data: []byte("file")},
+		},
+	} {
+		if _, err := extractorCovExtract(t, extractorCovArchive(t, order...)); err == nil {
+			t.Fatalf("%v: a file and a directory of one name were both reported as extracted", order)
+		}
+	}
+}
