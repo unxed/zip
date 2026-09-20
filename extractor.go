@@ -624,6 +624,65 @@ func newExtractor(r *Reader, c io.Closer, chroot string, opts []ExtractorOption)
 	return e, nil
 }
 
+// entryConflicts finds the entries that the archive cannot have both of: one
+// that lies below a name the archive also holds as a file, and a directory of a
+// name it also holds as a file. Every one of them is reported against the entry
+// that cannot be written.
+//
+// This is decided from the listing. Left to the extraction it was decided by
+// timing: files are written by workers while the next entry's parent
+// directories are made in the loop that feeds them, so `blocker` followed by
+// `blocker/sub/deep.txt` was an error when the directories got there first and
+// the file was written, then replaced by a directory and reported as extracted,
+// when the worker did (Race and darwin failed a test on exactly this). A file
+// that is already on the destination when the extraction starts is a different
+// thing and is dealt with where it is found, by linksToDirs.
+func (e *Extractor) entryConflicts() map[int]error {
+	names := make([]string, len(e.zr.File))
+	fileAt := make(map[string]int)
+	for i, f := range e.zr.File {
+		name, ok := e.strippedName(f.Name)
+		if !ok || strings.Contains(f.Name, ":") {
+			continue // not written, or written last as an alternate stream
+		}
+		n := strings.Trim(filepath.ToSlash(filepath.Clean(name)), "/")
+		if n == "" || n == "." {
+			continue
+		}
+		names[i] = n
+		if !f.Mode().IsDir() && f.Mode()&os.ModeSymlink == 0 && f.Linkname == "" {
+			if _, seen := fileAt[n]; !seen {
+				fileAt[n] = i
+			}
+		}
+	}
+
+	var conflicts map[int]error
+	fail := func(i int, format string, args ...any) {
+		if conflicts == nil {
+			conflicts = make(map[int]error)
+		}
+		if _, seen := conflicts[i]; !seen {
+			conflicts[i] = fmt.Errorf(format, args...)
+		}
+	}
+	for i, n := range names {
+		if n == "" {
+			continue
+		}
+		if j, ok := fileAt[n]; ok && j != i && e.zr.File[i].Mode().IsDir() {
+			fail(i, "zip: %s: the archive holds a file of this name as well as a directory", e.zr.File[i].Name)
+		}
+		for k := strings.LastIndexByte(n, '/'); k > 0; k = strings.LastIndexByte(n[:k], '/') {
+			if _, ok := fileAt[n[:k]]; ok {
+				fail(i, "zip: %s: %s is a file in the same archive and cannot also hold it", e.zr.File[i].Name, n[:k])
+				break
+			}
+		}
+	}
+	return conflicts
+}
+
 func (e *Extractor) Files() []*File {
 	return e.zr.File
 }
@@ -679,6 +738,11 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 		// write: one --strip-components leaves nothing of.
 		paths := make([]string, len(e.zr.File))
 
+		// The entries that cannot all be written, found from the listing and
+		// not from what the extraction happens to have on disk by the time it
+		// gets to them; see entryConflicts.
+		conflicts := e.entryConflicts()
+
 		taskCh := make(chan extractTask, e.options.concurrency)
 
 		wg, ctx := errgroup.WithContext(ctx)
@@ -724,6 +788,14 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 				name, ok := e.strippedName(file.Name)
 				if !ok {
 					continue // Skip file with fewer or equal components
+				}
+
+				if cerr := conflicts[i]; cerr != nil {
+					if e.options.tolerant {
+						fmt.Printf("zip: skipping %q: %v\n", file.Name, cerr)
+						continue
+					}
+					return cerr
 				}
 
 				path, err := e.absPath(name)
