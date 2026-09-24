@@ -7,7 +7,7 @@ import "os"
 
 type hardlinkKey struct{}
 
-func getHardLinkTarget(fi os.FileInfo, seen map[hardlinkKey]string) string         { return "" }
+func getHardLinkTarget(fi os.FileInfo, seen map[hardlinkKey]string) string { return "" }
 func rememberHardLink(fi os.FileInfo, relPath string, seen map[hardlinkKey]string) {
 	_ = fi
 	_ = relPath
