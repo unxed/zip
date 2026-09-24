@@ -178,8 +178,8 @@ func coverageZip64Extra(size int) []byte {
 }
 
 func coverageMarkZip64Fields(header []byte) {
-	binary.LittleEndian.PutUint32(header[18:], uint32max)
-	binary.LittleEndian.PutUint32(header[22:], uint32max)
+	binary.LittleEndian.PutUint32(header[20:], uint32max)
+	binary.LittleEndian.PutUint32(header[24:], uint32max)
 	binary.LittleEndian.PutUint32(header[42:], uint32max)
 }
 
