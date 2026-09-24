@@ -12,7 +12,7 @@ func TestCoverageSectionReaderWriterConstructor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if newSectionReaderWriter(f) == nil {
 		t.Fatal("constructor returned nil")
 	}
@@ -23,7 +23,7 @@ func TestCoverageSectionReaderWriterSeek(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	s := newSectionReaderWriter(f)
 	if _, err := s.Seek(0, io.SeekStart); err != nil {
 		t.Fatal(err)
@@ -35,7 +35,7 @@ func TestCoverageSectionReaderWriterRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if _, err := f.Write([]byte("data")); err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestCoverageSectionReaderWriterWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	s := newSectionReaderWriter(f)
 	if n, err := s.Write([]byte("data")); err != nil || n != 4 {
 		t.Fatalf("Write = %d, %v", n, err)
@@ -73,7 +73,7 @@ func TestCoverageUpdaterAppendHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	w := NewWriter(f)
 	entry, err := w.Create("old.txt")
 	if err != nil {
@@ -106,7 +106,7 @@ func TestCoverageUpdaterAppendHeaderRejectsInvalidExtra(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	w := NewWriter(f)
 	if _, err := w.Create("old.txt"); err != nil {
 		t.Fatal(err)
