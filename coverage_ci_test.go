@@ -162,9 +162,9 @@ func TestCoverageChunkSeekWriterContinuous(t *testing.T) {
 func coverageDirectoryHeader(extra []byte, disk uint16) []byte {
 	b := make([]byte, directoryHeaderLen+len(extra))
 	binary.LittleEndian.PutUint32(b, directoryHeaderSignature)
-	binary.LittleEndian.PutUint16(b[26:], 0)
-	binary.LittleEndian.PutUint16(b[28:], uint16(len(extra)))
-	binary.LittleEndian.PutUint16(b[30:], 0)
+	binary.LittleEndian.PutUint16(b[28:], 0)
+	binary.LittleEndian.PutUint16(b[30:], uint16(len(extra)))
+	binary.LittleEndian.PutUint16(b[32:], 0)
 	binary.LittleEndian.PutUint16(b[34:], disk)
 	copy(b[directoryHeaderLen:], extra)
 	return b
