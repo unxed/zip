@@ -1,0 +1,13 @@
+name: format-debug
+on:
+  push:
+    branches: [codex/coverage-ci-fix]
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+      - run: gofmt -d sys_windows.go
