@@ -1,11 +1,6 @@
 package zip
 
-import (
-	"bytes"
-	"io"
-	"os"
-	"testing"
-)
+import (`n`t"bytes"`n`t"encoding/binary" )
 
 func TestCoverageSectionReaderWriterConstructor(t *testing.T) {
 	f, err := os.CreateTemp(t.TempDir(), "section")
