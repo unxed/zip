@@ -163,6 +163,7 @@ func coverageDirectoryHeader(extra []byte, disk uint16) []byte {
 	b := make([]byte, directoryHeaderLen+len(extra))
 	binary.LittleEndian.PutUint32(b, directoryHeaderSignature)
 	binary.LittleEndian.PutUint16(b[28:], 0)
+	// #nosec G115 -- coverage data uses a bounded ZIP16 extra-field length
 	binary.LittleEndian.PutUint16(b[30:], uint16(len(extra)))
 	binary.LittleEndian.PutUint16(b[32:], 0)
 	binary.LittleEndian.PutUint16(b[34:], disk)
@@ -173,6 +174,7 @@ func coverageDirectoryHeader(extra []byte, disk uint16) []byte {
 func coverageZip64Extra(size int) []byte {
 	extra := make([]byte, 4+size)
 	binary.LittleEndian.PutUint16(extra, zip64ExtraID)
+	// #nosec G115 -- coverage data uses a bounded ZIP16 extra-field size
 	binary.LittleEndian.PutUint16(extra[2:], uint16(size))
 	return extra
 }
