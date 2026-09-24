@@ -265,3 +265,31 @@ func TestCoverageSplitVolumeRejectsShortSuffix(t *testing.T) {
 		t.Fatalf("short suffix = %q, %v", got, ok)
 	}
 }
+
+func TestCoverageReaderRejectsUnknownSplitDisk(t *testing.T) {
+	var archive bytes.Buffer
+	w := NewWriter(&archive)
+	entry, err := w.Create("entry.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := entry.Write([]byte("entry")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data := archive.Bytes()
+	end := bytes.LastIndex(data, []byte{0x50, 0x4b, 0x05, 0x06})
+	if end < 0 {
+		t.Fatal("end record not found")
+	}
+	dirOffset := binary.LittleEndian.Uint32(data[end+16:])
+	binary.LittleEndian.PutUint16(data[end+4:], 1)
+	binary.LittleEndian.PutUint16(data[end+6:], 1)
+	binary.LittleEndian.PutUint16(data[dirOffset+34:], 99)
+	r := &Reader{volumeStarts: []int64{0, 0}}
+	if err := r.init(bytes.NewReader(data), int64(len(data))); err != ErrFormat {
+		t.Fatalf("unknown split disk error = %v", err)
+	}
+}
