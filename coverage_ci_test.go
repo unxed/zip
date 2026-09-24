@@ -156,3 +156,108 @@ func TestCoverageChunkSeekWriterContinuous(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func coverageDirectoryHeader(extra []byte, disk uint16) []byte {
+	b := make([]byte, directoryHeaderLen+len(extra))
+	binary.LittleEndian.PutUint32(b, directoryHeaderSignature)
+	binary.LittleEndian.PutUint16(b[26:], 0)
+	binary.LittleEndian.PutUint16(b[28:], uint16(len(extra)))
+	binary.LittleEndian.PutUint16(b[30:], 0)
+	binary.LittleEndian.PutUint16(b[34:], disk)
+	copy(b[directoryHeaderLen:], extra)
+	return b
+}
+
+func coverageZip64Extra(size int) []byte {
+	extra := make([]byte, 4+size)
+	binary.LittleEndian.PutUint16(extra, zip64ExtraID)
+	binary.LittleEndian.PutUint16(extra[2:], uint16(size))
+	return extra
+}
+
+func coverageMarkZip64Fields(header []byte) {
+	binary.LittleEndian.PutUint32(header[18:], uint32max)
+	binary.LittleEndian.PutUint32(header[22:], uint32max)
+	binary.LittleEndian.PutUint32(header[42:], uint32max)
+}
+
+func TestCoverageSplitVolumeMissingArchive(t *testing.T) {
+	if got, ok := splitVolumeArchiveName("missing.z01"); ok || got != "" {
+		t.Fatalf("missing split volume = %q, %v", got, ok)
+	}
+}
+
+func TestCoverageSplitVolumeFindsZipx(t *testing.T) {
+	stem := filepath.Join(t.TempDir(), "archive")
+	if err := os.WriteFile(stem+".zipx", []byte("zipx"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := splitVolumeArchiveName(stem + ".z01")
+	if !ok || got != stem+".zipx" {
+		t.Fatalf("zipx split volume = %q, %v", got, ok)
+	}
+}
+
+func TestCoverageVolumeStartRejectsUnknownDisk(t *testing.T) {
+	if got, ok := volumeStart([]int64{0}, 1); ok || got != 0 {
+		t.Fatalf("unknown volume start = %d, %v", got, ok)
+	}
+}
+
+func TestCoverageHasDirectoryHeaderReadError(t *testing.T) {
+	if hasDirectoryHeader(bytes.NewReader(nil), 0) {
+		t.Fatal("short reader reported a directory header")
+	}
+}
+
+func TestCoverageHasDirectoryHeaderRejectsWrongSignature(t *testing.T) {
+	if hasDirectoryHeader(bytes.NewReader([]byte{1, 2, 3, 4}), 0) {
+		t.Fatal("wrong signature reported as a directory header")
+	}
+}
+
+func TestCoverageReadDirectoryHeaderRejectsMissingDiskNumber(t *testing.T) {
+	extra := coverageZip64Extra(24)
+	header := coverageDirectoryHeader(extra, uint16(^uint16(0)))
+	coverageMarkZip64Fields(header)
+	var f File
+	if err := readDirectoryHeader(&f, bytes.NewReader(header)); err != ErrFormat {
+		t.Fatalf("missing ZIP64 disk number error = %v", err)
+	}
+}
+
+func TestCoverageReadDirectoryHeaderReadsDiskNumber(t *testing.T) {
+	extra := coverageZip64Extra(28)
+	binary.LittleEndian.PutUint64(extra[4:], 11)
+	binary.LittleEndian.PutUint64(extra[12:], 22)
+	binary.LittleEndian.PutUint64(extra[20:], 33)
+	binary.LittleEndian.PutUint32(extra[28:], 7)
+	header := coverageDirectoryHeader(extra, uint16(^uint16(0)))
+	coverageMarkZip64Fields(header)
+	var f File
+	if err := readDirectoryHeader(&f, bytes.NewReader(header)); err != nil {
+		t.Fatal(err)
+	}
+	if f.diskNbr != 7 {
+		t.Fatalf("disk number = %d", f.diskNbr)
+	}
+}
+
+func TestCoverageReadDirectoryHeaderRejectsBadSignature(t *testing.T) {
+	var f File
+	if err := readDirectoryHeader(&f, bytes.NewReader(make([]byte, directoryHeaderLen))); err != ErrFormat {
+		t.Fatalf("bad signature error = %v", err)
+	}
+}
+
+func TestCoverageSplitVolumeRejectsNonNumericSuffix(t *testing.T) {
+	if got, ok := splitVolumeArchiveName("archive.zx1"); ok || got != "" {
+		t.Fatalf("non-numeric suffix = %q, %v", got, ok)
+	}
+}
+
+func TestCoverageSplitVolumeRejectsShortSuffix(t *testing.T) {
+	if got, ok := splitVolumeArchiveName("archive.z"); ok || got != "" {
+		t.Fatalf("short suffix = %q, %v", got, ok)
+	}
+}
