@@ -249,7 +249,7 @@ func TestPUA_Zip_NestedUndecodableNameMetadata(t *testing.T) {
 
 	dstDir := filepath.Join(tmpDir, "extract")
 	var chownErrs []string
-	e, err := NewExtractor(zipPath, dstDir, WithExtractorXattrs(true), WithExtractorChownErrorHandler(func(name string, cerr error) error {
+	e, err := NewExtractor(zipPath, dstDir, WithExtractorXattrs(true), WithExtractorPreserveOwner(true), WithExtractorChownErrorHandler(func(name string, cerr error) error {
 		chownErrs = append(chownErrs, fmt.Sprintf("%s: %v", name, cerr))
 		return nil
 	}))
