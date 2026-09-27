@@ -41,6 +41,8 @@ type extractorOptions struct {
 	incremental           bool
 	tolerant              bool
 	password              string
+	deviceNodes           bool
+	preserveOwner         bool
 }
 
 // WithExtractorPassword sets the password for WinZip AES and CDE decryption.
@@ -243,6 +245,37 @@ func WithExtractorChownErrorHandler(fn func(name string, err error) error) Extra
 func WithExtractorNumericOwner(b bool) ExtractorOption {
 	return func(o *extractorOptions) error {
 		o.numericOwner = b
+		return nil
+	}
+}
+
+// WithExtractorDeviceNodes enables creating the Unix device nodes an entry's
+// major and minor numbers describe -- block and character devices -- through
+// mknod. Off by default: the numbers, and the decision to make such a node at
+// all, come entirely from the archive, and mknod only does anything when the
+// caller runs with the privilege to make one. Extracting as that caller, an
+// archive left free to make one could put a node inside the destination
+// naming any device number it chose, including one a real disk already
+// answers to. Named pipes and sockets are unaffected by this option: making
+// either takes no privilege a caller extracting archives is ever short of,
+// and neither aliases a device the kernel already has.
+func WithExtractorDeviceNodes(b bool) ExtractorOption {
+	return func(o *extractorOptions) error {
+		o.deviceNodes = b
+		return nil
+	}
+}
+
+// WithExtractorPreserveOwner enables restoring the uid and gid an entry's
+// Info-ZIP Unix extra field carries, through Lchown. Off by default, for the
+// same reason as WithExtractorDeviceNodes: Lchown only does anything when the
+// caller runs with the privilege to give a file to an owner other than its
+// own, and an archive extracted as that caller could otherwise hand out
+// ownership -- uid 0 included -- of a file whose mode it also controls, to
+// whatever uid or gid it named.
+func WithExtractorPreserveOwner(b bool) ExtractorOption {
+	return func(o *extractorOptions) error {
+		o.preserveOwner = b
 		return nil
 	}
 }
@@ -899,6 +932,16 @@ func (e *Extractor) Extract(ctx context.Context) (err error) {
 					err = e.createDirectory(path, file)
 
 				case file.Mode()&irregularModes != 0:
+					// A block or character device is the one irregular
+					// entry mknod can be refused for on the caller's
+					// behalf: WithExtractorDeviceNodes is off by default,
+					// and with it off such an entry is left unwritten
+					// rather than handed to mknod. A named pipe or a
+					// socket carries no device number to alias and is
+					// queued the same as always.
+					if file.Mode()&os.ModeDevice != 0 && !e.options.deviceNodes {
+						continue
+					}
 					select {
 					case taskCh <- extractTask{file: e.zr.File[i], path: path, isIrregular: true}:
 					case <-ctx.Done():
@@ -1159,6 +1202,8 @@ func (e *Extractor) solidInnerOptions() []ExtractorOption {
 		WithExtractorUnlinkFirst(e.options.unlinkFirst),
 		WithExtractorNumericOwner(e.options.numericOwner),
 		WithExtractorTolerant(e.options.tolerant),
+		WithExtractorDeviceNodes(e.options.deviceNodes),
+		WithExtractorPreserveOwner(e.options.preserveOwner),
 	}
 }
 
@@ -1598,7 +1643,12 @@ func (e *Extractor) updateFileMetadata(path string, file *File) error {
 		_ = applyXattrs(path, &file.FileHeader)
 	}
 
-	if !file.OwnerSet {
+	// Lchown is what makes an owner the archive names take effect, and it
+	// only does that when the caller runs with the privilege to give a
+	// file away to an owner other than its own. WithExtractorPreserveOwner
+	// is off by default, so that privilege is not spent on the archive's
+	// say-so unless the caller has asked for it.
+	if !file.OwnerSet || !e.options.preserveOwner {
 		return nil
 	}
 

@@ -494,6 +494,7 @@ func TestExtractorCovStreamEntryMetadataFailure(t *testing.T) {
 		name: "file:stream", data: []byte("x"), owner: true,
 	})
 	_, err := extractorCovExtract(t, raw,
+		WithExtractorPreserveOwner(true),
 		WithExtractorChownErrorHandler(func(string, error) error { return refused }))
 	if !errors.Is(err, refused) {
 		t.Fatalf("the extraction returned %v, want %v", err, refused)
