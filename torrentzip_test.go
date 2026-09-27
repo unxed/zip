@@ -149,14 +149,22 @@ func TestArchiver_TorrentZip(t *testing.T) {
 	}
 }
 
-func TestWithArchiverTorrentZip_SetsLevel9(t *testing.T) {
+// TestWithArchiverTorrentZip_RecordsOnlyTheRequest pins that the option itself
+// settles nothing. The method and the level a torrentzip archive is written
+// with follow from the format once every option has run, so that giving the
+// options in either order cannot change the answer;
+// TestTorrentZipSettlesWhatWasNotAskedFor pins the settlement.
+func TestWithArchiverTorrentZip_RecordsOnlyTheRequest(t *testing.T) {
 	opts := &archiverOptions{}
 	opt := WithArchiverTorrentZip(true)
 	if err := opt(opts); err != nil {
 		t.Fatal(err)
 	}
-	if opts.level != 9 {
-		t.Errorf("expected level 9, got %d", opts.level)
+	if !opts.torrentZip {
+		t.Error("the option did not record that torrentzip was asked for")
+	}
+	if opts.methodSet || opts.level != 0 {
+		t.Error("the option decided the method or the level before the other options had run")
 	}
 }
 

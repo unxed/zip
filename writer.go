@@ -543,6 +543,14 @@ func (w *Writer) prepare(fh *FileHeader) error {
 // and an archive whose central directory is encrypted is not canonical either.
 var errTorrentZipEncryption = errors.New("zip: torrentzip and encryption cannot be combined: a torrentzip archive is canonical bytes and encryption has no place to record itself in them")
 
+// errTorrentZipCanonical is what a choice torrentzip cannot honour is refused
+// with. The bytes of a torrentzip archive follow from the files in it and
+// nothing else -- every entry deflated at the maximum level, with the checksum
+// of the whole directory in the comment -- so an entry written any other way
+// does not make a worse torrentzip archive but one whose comment says
+// something untrue about it.
+var errTorrentZipCanonical = errors.New("zip: torrentzip writes every entry deflated at the maximum level, so nothing else decides how an entry is written")
+
 func (w *Writer) CreateHeader(fh *FileHeader) (io.Writer, error) {
 	// Before prepare, so that a refused entry leaves the writer exactly as
 	// it was rather than with the previous entry flushed behind it.
@@ -581,13 +589,19 @@ func (w *Writer) CreateHeader(fh *FileHeader) (io.Writer, error) {
 		fh.ExternalAttrs = 0
 		fh.CreatorVersion = 0
 		fh.ReaderVersion = 20
-		if strings.HasSuffix(fh.Name, "/") {
-			fh.Method = Store
-			fh.Flags = 0
-		} else {
-			fh.Method = Deflate
-			fh.Flags = 2
-		}
+		// Every torrentzip entry is deflated, a directory included: the
+		// two byte empty deflate block the directory branch below
+		// writes is what it holds.
+		fh.Method = Deflate
+		fh.Flags = 2
+	}
+
+	// A directory entry is its header and nothing else, so a password put on
+	// one has nothing to protect: marking it encrypted would promise a body
+	// beginning with a salt and a password check and ending with an
+	// authentication code where there are no bytes at all.
+	if strings.HasSuffix(fh.Name, "/") {
+		fh.Password = ""
 	}
 
 	var originalMethod uint16
@@ -809,6 +823,16 @@ func writeHeader(w io.Writer, h *header) error {
 }
 
 func (w *Writer) CreateRaw(fh *FileHeader) (io.Writer, error) {
+	// Before prepare, so that a refused entry leaves the writer exactly as
+	// it was rather than with the previous entry flushed behind it. The
+	// bytes of a raw entry are the caller's, and the normalisation below
+	// says of every entry that it is deflated: an entry of any other method
+	// would go out under a header that does not describe it. A directory is
+	// the exception because its two bytes are not the caller's -- the empty
+	// deflate block below is this writer's own.
+	if w.torrentZip && fh.Method != Deflate && !strings.HasSuffix(filepath.ToSlash(fh.Name), "/") {
+		return nil, fmt.Errorf("zip: entry %q is written with method %d: %w", fh.Name, fh.Method, errTorrentZipCanonical)
+	}
 	if err := w.prepare(fh); err != nil {
 		return nil, err
 	}
@@ -826,17 +850,17 @@ func (w *Writer) CreateRaw(fh *FileHeader) (io.Writer, error) {
 		fh.ExternalAttrs = 0
 		fh.CreatorVersion = 0
 		fh.ReaderVersion = 20
+		// Every torrentzip entry is deflated. The caller's bytes already
+		// are, because the check above refused anything else; a
+		// directory's two are the empty deflate block written below.
+		fh.Method = Deflate
+		fh.Flags = 2
 		if strings.HasSuffix(fh.Name, "/") {
-			fh.Method = Deflate
-			fh.Flags = 2
 			fh.CompressedSize = 2
 			fh.CompressedSize64 = 2
 			fh.UncompressedSize = 0
 			fh.UncompressedSize64 = 0
 			fh.CRC32 = 0
-		} else {
-			fh.Method = Deflate
-			fh.Flags = 2
 		}
 	}
 
