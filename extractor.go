@@ -27,6 +27,7 @@ type extractorOptions struct {
 	chownErrorHandler     func(name string, err error) error
 	maxFileSize           int64
 	maxDecompressionRatio int64
+	maxTotalSize          int64
 	xattrs                bool
 	keepBroken            bool
 	keepOldFiles          bool
@@ -291,13 +292,32 @@ func WithExtractorMaxRatio(n int64) ExtractorOption {
 	}
 }
 
+// WithExtractorMaxTotalSize sets how many bytes an extraction may write in
+// all, over every file the archive holds. The per-file limit and the ratio
+// limit each look at one entry on its own, so an archive of many entries that
+// each stay under both is still free to expand to an unbounded total; this is
+// the limit that catches that case. Zero turns the total limit off; a
+// negative limit is refused, the same as the other two. An extraction that
+// would write past it fails with an error wrapping [ErrTotalSizeLimit].
+func WithExtractorMaxTotalSize(n int64) ExtractorOption {
+	return func(o *extractorOptions) error {
+		if n < 0 {
+			return fmt.Errorf("zip: maximum total size %d is negative", n)
+		}
+		o.maxTotalSize = n
+		return nil
+	}
+}
+
 // An extraction refuses to write more than its caller allowed it to: one file
-// larger than the size limit, or an entry that expands out of all proportion
-// to the room it takes up in the archive. Both are returned wrapped, so
+// larger than the size limit, an entry that expands out of all proportion to
+// the room it takes up in the archive, or the extraction as a whole writing
+// more than its total limit allows. All three are returned wrapped, so
 // errors.Is finds them behind the name of the file that ran into them.
 var (
-	ErrSizeLimit  = errors.New("zip: extracted size exceeds limit")
-	ErrRatioLimit = errors.New("zip: decompression ratio exceeds limit")
+	ErrSizeLimit      = errors.New("zip: extracted size exceeds limit")
+	ErrRatioLimit     = errors.New("zip: decompression ratio exceeds limit")
+	ErrTotalSizeLimit = errors.New("zip: total extracted size exceeds limit")
 )
 
 // maxSolidDepth is how far a solid archive may nest: the entry the archive
@@ -319,6 +339,7 @@ var errSolidNesting = errors.New("zip: solid archive nested too deep")
 type extractBudget struct {
 	maxFileSize int64  // per destination file; zero means no size limit
 	maxRatio    uint64 // per archive entry; zero means no ratio limit
+	maxTotal    int64  // over the whole extraction; zero means no total limit
 	written     *int64 // the extraction's own total, read while it runs
 }
 
@@ -327,6 +348,7 @@ func newExtractBudget(o *extractorOptions, written *int64) *extractBudget {
 		maxFileSize: o.maxFileSize,
 		// #nosec G115 -- WithExtractorMaxRatio refuses a negative ratio
 		maxRatio: uint64(o.maxDecompressionRatio),
+		maxTotal: o.maxTotalSize,
 		written:  written,
 	}
 }
@@ -449,9 +471,10 @@ func (e *entryBudget) preallocSize(declared uint64) int64 {
 }
 
 // file returns the writer one destination file of this entry is written
-// through.
+// through. Its bytes are the extraction's own output, so they are the ones
+// the total limit is measured against.
 func (e *entryBudget) file(w io.Writer) *budgetWriter {
-	return &budgetWriter{e: e, w: w, limit: e.b.maxFileSize, total: e.b.written}
+	return &budgetWriter{e: e, w: w, limit: e.b.maxFileSize, total: e.b.written, countsTotal: true}
 }
 
 // scratch returns the writer for a file the extraction makes for itself rather
@@ -462,7 +485,10 @@ func (e *entryBudget) file(w io.Writer) *budgetWriter {
 // refuse what the ceiling had just let through -- so what bounds it is the
 // entry's ratio, on the bytes as they are copied. For the same reason its
 // bytes are not the extraction's output and are counted nowhere the caller can
-// read: what came out of the archive is what the second extractor writes.
+// read: what came out of the archive is what the second extractor writes. The
+// total limit, left unset here (countsTotal defaults to false), bounds that
+// same output and not a copy this package makes of its own and removes again
+// before returning.
 func (e *entryBudget) scratch(w io.Writer) *budgetWriter {
 	return &budgetWriter{e: e, w: w, total: new(int64)}
 }
@@ -495,11 +521,12 @@ func (e *entryBudget) charge(n int64) error {
 
 // budgetWriter is one destination file, and the only way bytes get into one.
 type budgetWriter struct {
-	e     *entryBudget
-	w     io.Writer
-	limit int64  // what this one file may take; zero means only the ratio bounds it
-	total *int64 // where these bytes are counted, atomically
-	n     int64  // bytes accounted for in this file
+	e           *entryBudget
+	w           io.Writer
+	limit       int64  // what this one file may take; zero means only the ratio bounds it
+	total       *int64 // where these bytes are counted, atomically
+	n           int64  // bytes accounted for in this file
+	countsTotal bool   // whether total is the extraction's own, so the total limit applies to it
 }
 
 func (w *budgetWriter) Write(p []byte) (int, error) {
@@ -527,6 +554,14 @@ func (w *budgetWriter) skip(n int64) error {
 func (w *budgetWriter) charge(n int64) error {
 	if w.limit > 0 && w.n+n > w.limit {
 		return fmt.Errorf("zip: file %q writes past the limit of %d bytes: %w", w.e.name, w.limit, ErrSizeLimit)
+	}
+	// The per-file limit and the ratio limit each look at this one file or
+	// this one entry; the total limit looks across every file the
+	// extraction has written so far, which is the only place an archive of
+	// many small entries -- each under both of the other limits -- is
+	// caught before it fills the disk.
+	if w.countsTotal && w.e.b.maxTotal > 0 && atomic.LoadInt64(w.total)+n > w.e.b.maxTotal {
+		return fmt.Errorf("zip: extraction writes past the total limit of %d bytes: %w", w.e.b.maxTotal, ErrTotalSizeLimit)
 	}
 	w.n += n
 	return w.e.charge(n)
@@ -600,8 +635,9 @@ func newExtractor(r *Reader, c io.Closer, chroot string, opts []ExtractorOption)
 	}
 
 	e.options.concurrency = runtime.GOMAXPROCS(0)
-	e.options.maxFileSize = 1024 * 1024 * 1024 // 1GB default
-	e.options.maxDecompressionRatio = 4000     // 4000:1 default (to prevent false positives on zero-filled files)
+	e.options.maxFileSize = 1024 * 1024 * 1024       // 1GB default
+	e.options.maxDecompressionRatio = 4000           // 4000:1 default (to prevent false positives on zero-filled files)
+	e.options.maxTotalSize = 32 * 1024 * 1024 * 1024 // 32GB default across the whole extraction
 	e.options.xattrs = true
 	e.options.chownErrorHandler = func(name string, err error) error {
 		if pe, ok := err.(*os.PathError); ok {
@@ -1111,6 +1147,7 @@ func (e *Extractor) solidInnerOptions() []ExtractorOption {
 		WithExtractorChownErrorHandler(e.options.chownErrorHandler),
 		WithExtractorMaxFileSize(e.options.maxFileSize),
 		WithExtractorMaxRatio(e.options.maxDecompressionRatio),
+		WithExtractorMaxTotalSize(e.options.maxTotalSize),
 		WithExtractorXattrs(e.options.xattrs),
 		WithExtractorKeepBroken(e.options.keepBroken),
 		WithExtractorKeepOldFiles(e.options.keepOldFiles),

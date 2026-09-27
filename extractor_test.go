@@ -199,6 +199,91 @@ func TestExtractor_RatioBomb(t *testing.T) {
 	}
 }
 
+// TestExtractor_TotalSizeLimit covers the case WithExtractorMaxFileSize and
+// WithExtractorMaxRatio do not: many entries, each of them within both of
+// those per-entry limits, whose sum is not. Without a limit of its own on the
+// whole extraction, an archive built this way could expand to an unbounded
+// total on disk.
+func TestExtractor_TotalSizeLimit(t *testing.T) {
+	tmp := t.TempDir()
+	zipPath := filepath.Join(tmp, "many.zip")
+	dstDir := filepath.Join(tmp, "extract")
+
+	f, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeAt(t, f)
+	zw := NewWriter(f)
+	// Ten entries of 1000 bytes each, well under a 1024 byte per-file limit
+	// and a 1:1 ratio (stored, so there is nothing to expand).
+	for i := 0; i < 10; i++ {
+		w := mustCreateHeader(t, zw, &FileHeader{
+			Name:   fmt.Sprintf("entry-%d.bin", i),
+			Method: Store,
+		})
+		mustWrite(t, w, make([]byte, 1000))
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close %s: %v", zipPath, err)
+	}
+
+	// The sum, 10000 bytes, is well past a 5000 byte total limit, even
+	// though every single entry stays under the per-file and ratio limits.
+	e, err := NewExtractor(zipPath, dstDir,
+		WithExtractorMaxFileSize(1024), WithExtractorMaxRatio(1), WithExtractorMaxTotalSize(5000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeAt(t, e)
+
+	if err := e.Extract(context.Background()); !errors.Is(err, ErrTotalSizeLimit) {
+		t.Errorf("expected total size limit error (ErrTotalSizeLimit), got: %v", err)
+	}
+}
+
+// TestExtractor_TotalSizeLimit_Disabled covers the zero value: a total limit
+// of zero turns the check off, same as the per-file and ratio limits, so an
+// archive that would trip a smaller one extracts cleanly.
+func TestExtractor_TotalSizeLimit_Disabled(t *testing.T) {
+	tmp := t.TempDir()
+	zipPath := filepath.Join(tmp, "many.zip")
+	dstDir := filepath.Join(tmp, "extract")
+
+	f, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeAt(t, f)
+	zw := NewWriter(f)
+	for i := 0; i < 10; i++ {
+		w := mustCreateHeader(t, zw, &FileHeader{
+			Name:   fmt.Sprintf("entry-%d.bin", i),
+			Method: Store,
+		})
+		mustWrite(t, w, make([]byte, 1000))
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close %s: %v", zipPath, err)
+	}
+
+	e, err := NewExtractor(zipPath, dstDir, WithExtractorMaxTotalSize(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeAt(t, e)
+
+	if err := e.Extract(context.Background()); err != nil {
+		t.Errorf("a disabled total size limit refused the extraction: %v", err)
+	}
+}
+
 func TestExtractor_PermissionsPreservation(t *testing.T) {
 	// Unix only, as permissions work differently on Windows
 	if runtime.GOOS == "windows" {
