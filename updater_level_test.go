@@ -109,7 +109,7 @@ func TestUpdaterAppendHeaderRespectsLevel(t *testing.T) {
 		if err := w.Close(); err != nil {
 			t.Fatalf("flate close: %v", err)
 		}
-		return uint64(buf.Len())
+		return uint64(buf.Len()) // #nosec G115 -- buf.Len() is always non-negative
 	}
 
 	for _, level := range []int{1, 9} {
