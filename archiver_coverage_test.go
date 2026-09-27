@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -1228,5 +1229,105 @@ func TestArchiverCov_TorrentZipZlibRefusesToStart(t *testing.T) {
 	err := a.Archive(context.Background(), walkFilesFor(t, srcDir))
 	if !errors.Is(err, errArchiverCovNoRoom) {
 		t.Fatalf("archiving gave %v, want the refusal the zlib allocator reported", err)
+	}
+}
+
+// TestArchiverCov_WriteRawEntryTorrentZipEmptyBody covers writeRawEntry's own
+// empty-body case under torrentzip: a hard link or a device node has no body
+// at all, and torrentzip's answer for that is the same two-byte empty deflate
+// block an empty regular file gets (TestArchiverCov_TorrentZipEmptyEntry),
+// written by hand rather than through a compressor. createHardlink and
+// createSpecialFile both refuse a torrentzip archive before they ever reach
+// writeRawEntry (torrentzip_canonical_test.go), so it is called directly
+// here, the same way aes_winzip_test.go reaches its own AES branch.
+func TestArchiverCov_WriteRawEntryTorrentZipEmptyBody(t *testing.T) {
+	var buf bytes.Buffer
+	a := ArchiverCovNewArchiver(t, &buf, t.TempDir(),
+		WithArchiverTorrentZip(true), WithArchiverMethod(Deflate), WithArchiverLevel(9))
+
+	hdr, fi := ArchiverCovHeader("empty.bin", Deflate, 0)
+	if err := a.writeRawEntry(fi, hdr, nil); err != nil {
+		t.Fatalf("writing an empty raw entry under torrentzip: %v", err)
+	}
+	if err := a.Close(); err != nil {
+		t.Fatalf("closing the archiver: %v", err)
+	}
+
+	zr := ArchiverCovRead(t, buf.Bytes(), "")
+	if len(zr.File) != 1 {
+		t.Fatalf("the archive holds %d entries, want 1", len(zr.File))
+	}
+	if zr.File[0].CompressedSize64 != 2 {
+		t.Errorf("the empty raw entry is %d bytes, want the 2 of an empty deflate block",
+			zr.File[0].CompressedSize64)
+	}
+	if got := ArchiverCovEntry(t, zr, "empty.bin"); len(got) != 0 {
+		t.Errorf("the empty raw entry came back %d bytes, want none", len(got))
+	}
+}
+
+// TestArchiverCov_WriteRawEntryTorrentZipCompressesBody covers writeRawEntry's
+// other torrentzip case: a non-empty body -- the target of a symlink, in
+// createSymlink -- goes through the compressor torrentzip registers rather
+// than through the empty-block shortcut above. Torrentzip refuses a symlink
+// outright before createSymlink can ever reach writeRawEntry with one
+// (torrentzip_canonical_test.go), so, as above, writeRawEntry is called
+// directly.
+func TestArchiverCov_WriteRawEntryTorrentZipCompressesBody(t *testing.T) {
+	var buf bytes.Buffer
+	a := ArchiverCovNewArchiver(t, &buf, t.TempDir(),
+		WithArchiverTorrentZip(true), WithArchiverMethod(Deflate), WithArchiverLevel(9))
+
+	body := []byte("the target of a link, held in memory and deflated by hand")
+	hdr, fi := ArchiverCovHeader("link.bin", Deflate, len(body))
+	hdr.CRC32 = crc32.ChecksumIEEE(body)
+	if err := a.writeRawEntry(fi, hdr, body); err != nil {
+		t.Fatalf("writing a raw entry under torrentzip: %v", err)
+	}
+	if err := a.Close(); err != nil {
+		t.Fatalf("closing the archiver: %v", err)
+	}
+
+	zr := ArchiverCovRead(t, buf.Bytes(), "")
+	if len(zr.File) != 1 {
+		t.Fatalf("the archive holds %d entries, want 1", len(zr.File))
+	}
+	if zr.File[0].Method != Deflate {
+		t.Errorf("the raw entry is method %d, want %d", zr.File[0].Method, Deflate)
+	}
+	if got := ArchiverCovEntry(t, zr, "link.bin"); !bytes.Equal(got, body) {
+		t.Errorf("the raw entry came back %q, want %q", got, body)
+	}
+}
+
+// errArchiverCovRawEntryNoZlib stands in for what the zlib allocator reports
+// when writeRawEntry's own compressor cannot even be opened.
+var errArchiverCovRawEntryNoZlib = errors.New("zlib: malloc fail during a raw entry")
+
+// TestArchiverCov_WriteRawEntryTorrentZipCompressorFails covers writeRawEntry
+// giving up before writing anything when the compressor it asks for under
+// torrentzip refuses to open -- the same zlib allocator refusal
+// TestArchiverCov_TorrentZipZlibRefusesToStart covers for a regular file's own
+// compressor, met here instead on the buffer-based path writeRawEntry uses for
+// a hard link, a device node or a symlink's target.
+func TestArchiverCov_WriteRawEntryTorrentZipCompressorFails(t *testing.T) {
+	real := newZlibWriterLevel
+	t.Cleanup(func() { newZlibWriterLevel = real })
+	newZlibWriterLevel = func(io.Writer, int) (*zlib4go.Writer, error) {
+		return nil, errArchiverCovRawEntryNoZlib
+	}
+
+	var buf bytes.Buffer
+	a := ArchiverCovNewArchiver(t, &buf, t.TempDir(),
+		WithArchiverTorrentZip(true), WithArchiverMethod(Deflate), WithArchiverLevel(9))
+
+	body := []byte("the target of a link")
+	hdr, fi := ArchiverCovHeader("link.bin", Deflate, len(body))
+	err := a.writeRawEntry(fi, hdr, body)
+	if !errors.Is(err, errArchiverCovRawEntryNoZlib) {
+		t.Fatalf("writing a raw entry returned %v, want %v", err, errArchiverCovRawEntryNoZlib)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("%d bytes were written for an entry whose compressor never opened", buf.Len())
 	}
 }

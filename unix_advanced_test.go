@@ -301,6 +301,45 @@ func TestExtractor_PreserveOwnerOptIn(t *testing.T) {
 	})
 }
 
+// TestExtractor_PreserveOwnerNoHandlerSwallowsError covers what happens when
+// Lchown is asked for through WithExtractorPreserveOwner but the caller opts
+// out of the default chown error handler by naming none of its own -- passing
+// WithExtractorChownErrorHandler(nil) rather than simply not calling it, since
+// NewExtractor otherwise installs a default handler on its own. With no
+// handler at all, an owner this user may not give away is passed over exactly
+// as it would be with the default one, and the extraction still succeeds.
+func TestExtractor_PreserveOwnerNoHandlerSwallowsError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can give a file away to uid 0 without being refused")
+	}
+	var buf bytes.Buffer
+	zw := NewWriter(&buf)
+	fh := &FileHeader{Name: "entry.txt", Method: Store, Uid: 0, Gid: 0}
+	fh.OwnerSet = true
+	fh.SetMode(0644)
+	w, err := zw.CreateHeader(fh)
+	if err != nil {
+		t.Fatalf("CreateHeader: %v", err)
+	}
+	if _, err := w.Write([]byte("data")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("closing the writer: %v", err)
+	}
+	raw := buf.Bytes()
+
+	_, dst, err := extractArchiveTo(t, raw,
+		WithExtractorPreserveOwner(true),
+		WithExtractorChownErrorHandler(nil))
+	if err != nil {
+		t.Fatalf("extraction failed: %v, want the chown failure swallowed since no handler was given", err)
+	}
+	if _, serr := os.Stat(filepath.Join(dst, "entry.txt")); serr != nil {
+		t.Fatalf("the entry was not extracted: %v", serr)
+	}
+}
+
 func TestXattrs_Zip(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcFile := filepath.Join(tmpDir, "src.txt")
