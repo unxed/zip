@@ -646,6 +646,7 @@ func TestExtractorOptions_RejectNegativeLimits(t *testing.T) {
 	}{
 		{"maximum file size", WithExtractorMaxFileSize(-1)},
 		{"maximum ratio", WithExtractorMaxRatio(-1)},
+		{"maximum total size", WithExtractorMaxTotalSize(-1)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dst := filepath.Join(t.TempDir(), "dst")

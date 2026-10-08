@@ -194,6 +194,152 @@ func TestExtractor_Fifo_Zip(t *testing.T) {
 	}
 }
 
+// deviceNodeArchive is a one-entry archive naming a character device, with
+// the major and minor /dev/null carries on Linux -- a device number that
+// exists without depending on what else the test machine has, since nothing
+// here is going to succeed in making a node that is really usable as one.
+func deviceNodeArchive(t *testing.T) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := NewWriter(&buf)
+	fh := &FileHeader{Name: "node", Method: Store, Devmajor: 1, Devminor: 3}
+	fh.SetMode(os.ModeDevice | os.ModeCharDevice | 0600)
+	if _, err := zw.CreateHeader(fh); err != nil {
+		t.Fatalf("CreateHeader: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("closing the writer: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// TestExtractor_DeviceNodesOptIn covers WithExtractorDeviceNodes: mknod only
+// does anything for a caller with the privilege to make a device node, so an
+// archive naming one could otherwise alias any device number it chose. Off
+// by default, the entry is left unwritten rather than handed to mknod at all;
+// asked for explicitly, mknod is attempted and, run as an ordinary user, is
+// refused the way it always has been.
+func TestExtractor_DeviceNodesOptIn(t *testing.T) {
+	raw := deviceNodeArchive(t)
+
+	t.Run("off by default, nothing is made", func(t *testing.T) {
+		_, dst, err := extractArchiveTo(t, raw)
+		if err != nil {
+			t.Fatalf("extraction failed: %v", err)
+		}
+		if _, serr := os.Lstat(filepath.Join(dst, "node")); !os.IsNotExist(serr) {
+			t.Errorf("device nodes are opt-in and were not asked for, but Lstat(%q) = %v", "node", serr)
+		}
+	})
+
+	t.Run("opt-in reaches mknod", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root can make a device node, so this cannot be made to fail")
+		}
+		if _, _, err := extractArchiveTo(t, raw, WithExtractorDeviceNodes(true)); err == nil {
+			t.Fatal("an ordinary user was allowed to make a character device")
+		}
+	})
+}
+
+// TestExtractor_PreserveOwnerOptIn covers WithExtractorPreserveOwner: like
+// device nodes, Lchown only does anything for a caller with the privilege to
+// give a file to an owner other than its own, so an archive naming uid 0
+// could otherwise hand root ownership of a file whose mode it also controls
+// to whoever extracts it. Off by default, Lchown is never attempted at all;
+// asked for explicitly, it is, and an owner the caller cannot give away is
+// reported through the chown error handler the same as it always has been.
+func TestExtractor_PreserveOwnerOptIn(t *testing.T) {
+	var buf bytes.Buffer
+	zw := NewWriter(&buf)
+	fh := &FileHeader{Name: "entry.txt", Method: Store, Uid: 0, Gid: 0}
+	fh.OwnerSet = true
+	fh.SetMode(0644)
+	w, err := zw.CreateHeader(fh)
+	if err != nil {
+		t.Fatalf("CreateHeader: %v", err)
+	}
+	if _, err := w.Write([]byte("data")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("closing the writer: %v", err)
+	}
+	raw := buf.Bytes()
+
+	t.Run("off by default, Lchown is never attempted", func(t *testing.T) {
+		handlerCalled := false
+		_, _, err := extractArchiveTo(t, raw, WithExtractorChownErrorHandler(func(string, error) error {
+			handlerCalled = true
+			return nil
+		}))
+		if err != nil {
+			t.Fatalf("extraction failed: %v", err)
+		}
+		if handlerCalled {
+			t.Error("ownership is opt-in and was not asked for, but the chown error handler ran anyway")
+		}
+	})
+
+	t.Run("opt-in reaches Lchown", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root can give a file away to uid 0 without being refused")
+		}
+		handlerCalled := false
+		_, _, err := extractArchiveTo(t, raw,
+			WithExtractorPreserveOwner(true),
+			WithExtractorChownErrorHandler(func(string, error) error {
+				handlerCalled = true
+				return nil
+			}))
+		if err != nil {
+			t.Fatalf("extraction failed: %v", err)
+		}
+		if !handlerCalled {
+			t.Error("WithExtractorPreserveOwner(true) did not reach Lchown")
+		}
+	})
+}
+
+// TestExtractor_PreserveOwnerNoHandlerSwallowsError covers what happens when
+// Lchown is asked for through WithExtractorPreserveOwner but the caller opts
+// out of the default chown error handler by naming none of its own -- passing
+// WithExtractorChownErrorHandler(nil) rather than simply not calling it, since
+// NewExtractor otherwise installs a default handler on its own. With no
+// handler at all, an owner this user may not give away is passed over exactly
+// as it would be with the default one, and the extraction still succeeds.
+func TestExtractor_PreserveOwnerNoHandlerSwallowsError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can give a file away to uid 0 without being refused")
+	}
+	var buf bytes.Buffer
+	zw := NewWriter(&buf)
+	fh := &FileHeader{Name: "entry.txt", Method: Store, Uid: 0, Gid: 0}
+	fh.OwnerSet = true
+	fh.SetMode(0644)
+	w, err := zw.CreateHeader(fh)
+	if err != nil {
+		t.Fatalf("CreateHeader: %v", err)
+	}
+	if _, err := w.Write([]byte("data")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("closing the writer: %v", err)
+	}
+	raw := buf.Bytes()
+
+	_, dst, err := extractArchiveTo(t, raw,
+		WithExtractorPreserveOwner(true),
+		WithExtractorChownErrorHandler(nil))
+	if err != nil {
+		t.Fatalf("extraction failed: %v, want the chown failure swallowed since no handler was given", err)
+	}
+	if _, serr := os.Stat(filepath.Join(dst, "entry.txt")); serr != nil {
+		t.Fatalf("the entry was not extracted: %v", serr)
+	}
+}
+
 func TestXattrs_Zip(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcFile := filepath.Join(tmpDir, "src.txt")

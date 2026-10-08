@@ -73,13 +73,16 @@ func extractSolidInto(t *testing.T, raw []byte, dst string, opts ...ExtractorOpt
 	return e.Extract(context.Background())
 }
 
-// failingOwnership returns the option pair that makes applying an entry's
+// failingOwnership returns the option that makes applying an entry's
 // metadata fail, and skips the test where it cannot be made to.
 //
 // Ownership is the only step of updateFileMetadata a test can fail on demand:
 // the times and the mode always take on a file that was just written, while
 // an ordinary user is refused a change of owner. Windows applies no ownership
-// at all, and root is refused nothing.
+// at all, and root is refused nothing. Restoring ownership is itself opt-in
+// (WithExtractorPreserveOwner), so the option this returns turns that on as
+// well as installing the handler that refuses it -- without both, Lchown is
+// never attempted and there is nothing for the handler to answer for.
 func failingOwnership(t *testing.T) (ExtractorOption, error) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -89,7 +92,11 @@ func failingOwnership(t *testing.T) (ExtractorOption, error) {
 		t.Skip("this user can give a file any owner it likes")
 	}
 	refused := errors.New("the owner could not be set")
-	return WithExtractorChownErrorHandler(func(string, error) error { return refused }), refused
+	return func(o *extractorOptions) error {
+		o.preserveOwner = true
+		o.chownErrorHandler = func(string, error) error { return refused }
+		return nil
+	}, refused
 }
 
 // TestExtractSolid_DirectoryEntry covers a solid archive that carries a

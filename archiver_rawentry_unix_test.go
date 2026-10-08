@@ -34,69 +34,71 @@ func rawEntryTree(t *testing.T) string {
 	return src
 }
 
-// TestArchiverRawEntries_EncodedAsTheHeaderSays: with a password the body of
-// a symlink, FIFO or hard link is a WinZip AES body, and under torrentzip a
-// deflate stream, as the header written for it claims. Written as they came,
-// 7-Zip refused the first with a header error and the second with a data
-// error, and this package could not read either back.
+// TestArchiverRawEntries_EncodedAsTheHeaderSays: with a password, a symlink's
+// body is a WinZip AES body, as the header written for it claims. Written as
+// it came, 7-Zip refused it with a header error, and this package could not
+// read it back either. A FIFO carries no bytes at all, so there is nothing
+// here to encrypt: aes_link_entries_test.go pins that half of the rule on its
+// own, and the check here just confirms the archiver-level path agrees.
+//
+// Torrentzip is not covered here any more: it now refuses a symlink, a hard
+// link or a device node outright, before ever reaching this raw path, rather
+// than writing one it cannot make canonical (torrentzip_canonical_test.go).
 func TestArchiverRawEntries_EncodedAsTheHeaderSays(t *testing.T) {
 	src := rawEntryTree(t)
-	for _, tc := range []struct {
-		name      string
-		opts      []ArchiverOption
-		password  string
-		method    uint16
-		emptyBody uint64
-	}{
-		{"password", []ArchiverOption{WithArchiverPassword("pw")}, "pw", winzipAesMethod, 16 + 2 + 10},
-		{"torrentzip", []ArchiverOption{WithArchiverTorrentZip(true)}, "", Deflate, 2},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var buf bytes.Buffer
-			a, err := NewArchiver(&buf, src, tc.opts...)
-			if err != nil {
-				t.Fatalf("building the archiver: %v", err)
-			}
-			if err := a.Archive(context.Background(), walkFilesFor(t, src)); err != nil {
-				t.Fatalf("archive: %v", err)
-			}
-			if err := a.Close(); err != nil {
-				t.Fatalf("close: %v", err)
-			}
-			raw := buf.Bytes()
+	var buf bytes.Buffer
+	a, err := NewArchiver(&buf, src, WithArchiverPassword("pw"))
+	if err != nil {
+		t.Fatalf("building the archiver: %v", err)
+	}
+	if err := a.Archive(context.Background(), walkFilesFor(t, src)); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	if err := a.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	raw := buf.Bytes()
 
-			got := aesWinZipReadAll(t, raw, tc.password)
-			if string(got["lnk"]) != "a.txt" {
-				t.Errorf("lnk reads %q, want the target a.txt", got["lnk"])
-			}
-			if len(got["fifo"]) != 0 {
-				t.Errorf("fifo reads %d bytes, want none", len(got["fifo"]))
-			}
+	got := aesWinZipReadAll(t, raw, "pw")
+	if string(got["lnk"]) != "a.txt" {
+		t.Errorf("lnk reads %q, want the target a.txt", got["lnk"])
+	}
+	if len(got["fifo"]) != 0 {
+		t.Errorf("fifo reads %d bytes, want none", len(got["fifo"]))
+	}
 
-			zr, err := NewReader(bytes.NewReader(raw), int64(len(raw)))
-			if err != nil {
-				t.Fatalf("read the archive back: %v", err)
+	zr, err := NewReader(bytes.NewReader(raw), int64(len(raw)))
+	if err != nil {
+		t.Fatalf("read the archive back: %v", err)
+	}
+	for _, f := range zr.File {
+		switch f.Name {
+		case "lnk":
+			if f.Method != winzipAesMethod {
+				t.Errorf("lnk: method %d, want %d", f.Method, winzipAesMethod)
 			}
-			for _, f := range zr.File {
-				if f.Name != "lnk" && f.Name != "fifo" {
-					continue
-				}
-				if f.Method != tc.method {
-					t.Errorf("%s: method %d, want %d", f.Name, f.Method, tc.method)
-				}
-				if f.Name == "fifo" && f.CompressedSize64 != tc.emptyBody {
-					t.Errorf("fifo: body of %d bytes, want %d", f.CompressedSize64, tc.emptyBody)
-				}
+		case "fifo":
+			if f.Method != Store {
+				t.Errorf("fifo: method %d, want %d", f.Method, Store)
 			}
-		})
+			if f.Flags&0x1 != 0 {
+				t.Errorf("fifo: flags %#04x, and there is nothing here to encrypt", f.Flags)
+			}
+			if f.CompressedSize64 != 0 {
+				t.Errorf("fifo: body of %d bytes, want none", f.CompressedSize64)
+			}
+		}
 	}
 }
 
 var errRawEntryNoZlib = errors.New("no zlib stream for this test")
 
-// TestArchiverRawEntries_TorrentZipCompressorRefuses: a symlink's body goes
-// through the compressor torrentzip registers, and its refusal comes back out
-// rather than an entry with no body.
+// TestArchiverRawEntries_TorrentZipCompressorRefuses: under torrentzip a
+// file's body goes through the compressor torrentzip registers, and its
+// refusal comes back out rather than an entry with no body. A symlink used to
+// exercise this through the raw path, but torrentzip now refuses a symlink
+// before ever reaching a compressor (torrentzip_canonical_test.go), so a
+// regular file exercises the same compressor here instead.
 func TestArchiverRawEntries_TorrentZipCompressorRefuses(t *testing.T) {
 	real := newZlibWriterLevel
 	t.Cleanup(func() { newZlibWriterLevel = real })
@@ -105,9 +107,7 @@ func TestArchiverRawEntries_TorrentZipCompressorRefuses(t *testing.T) {
 	}
 
 	src := t.TempDir()
-	if err := os.Symlink("elsewhere", filepath.Join(src, "lnk")); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
+	mustWriteFile(t, filepath.Join(src, "a.txt"), []byte("target contents\n"), 0o644)
 	var buf bytes.Buffer
 	a, err := NewArchiver(&buf, src, WithArchiverTorrentZip(true), WithArchiverMethod(Deflate), WithArchiverLevel(9))
 	if err != nil {

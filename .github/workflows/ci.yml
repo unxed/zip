@@ -155,6 +155,12 @@ jobs:
     needs: [test, test-freebsd]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # id-token: write is the one permission beyond the workflow's read-only
+    # default, and only this job gets it: codecov-action uses it to mint an
+    # OIDC token for the upload below, so no CODECOV_TOKEN secret is needed.
+    permissions:
+      contents: read
+      id-token: write
     env:
       CGO_ENABLED: 0
       # The one file no cell builds: sys_other.go is the fallback for the
@@ -193,6 +199,19 @@ jobs:
           mkdir -p merged
           go tool covdata merge -i="${dirs%,}" -o=merged
           go tool covdata textfmt -i=merged -o=merged.txt
+
+      # The merged profile goes to Codecov for per-file history and PR
+      # annotations. The gate stays the step below; Codecov is a report, so a
+      # failed upload (a fork PR, which is granted no id-token, or a Codecov
+      # outage) must not turn the job red. It runs before the gate so that a
+      # regression is visible there too, not only in this job's log.
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          files: merged.txt
+          disable_search: true
+          use_oidc: true
+          fail_ci_if_error: false
 
       # A file with no statements at all is invisible to coverage, so the
       # expectation is stated over the files that declare a function.

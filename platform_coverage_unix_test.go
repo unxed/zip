@@ -150,6 +150,57 @@ func TestPlatformCovLookupUserAndGroupRejectANonNumericId(t *testing.T) {
 	}
 }
 
+// TestPlatformCovLookupUserAndGroupServeFromCache covers the other half of
+// the name-to-id cache from TestPlatformCovLookupUserAndGroupRejectANonNumericId:
+// an id read once is kept, and the second lookup of the same name answers from
+// uidCache/gidCache directly rather than asking the account database again --
+// the same saving getUsername/getGroupname give the reverse direction, here
+// exercised for lookupUser and lookupGroup instead.
+func TestPlatformCovLookupUserAndGroupServeFromCache(t *testing.T) {
+	const name = "platformcov-cached-account"
+
+	origUser, origGroup := lookupUserByName, lookupGroupByName
+	t.Cleanup(func() {
+		lookupUserByName, lookupGroupByName = origUser, origGroup
+	})
+
+	var userCalls, groupCalls int
+	lookupUserByName = func(n string) (*user.User, error) {
+		userCalls++
+		return &user.User{Username: n, Uid: "4242"}, nil
+	}
+	lookupGroupByName = func(n string) (*user.Group, error) {
+		groupCalls++
+		return &user.Group{Name: n, Gid: "4343"}, nil
+	}
+
+	resolveMut.Lock()
+	delete(uidCache, name)
+	delete(gidCache, name)
+	resolveMut.Unlock()
+	t.Cleanup(func() {
+		resolveMut.Lock()
+		delete(uidCache, name)
+		delete(gidCache, name)
+		resolveMut.Unlock()
+	})
+
+	for i := 0; i < 2; i++ {
+		if id, err := lookupUser(name); err != nil || id != 4242 {
+			t.Fatalf("lookupUser #%d = %d, %v, want 4242, nil", i, id, err)
+		}
+		if id, err := lookupGroup(name); err != nil || id != 4343 {
+			t.Fatalf("lookupGroup #%d = %d, %v, want 4343, nil", i, id, err)
+		}
+	}
+	if userCalls != 1 {
+		t.Errorf("the account database was asked for the user %d times, want 1: the second lookup should have come from the cache", userCalls)
+	}
+	if groupCalls != 1 {
+		t.Errorf("the account database was asked for the group %d times, want 1: the second lookup should have come from the cache", groupCalls)
+	}
+}
+
 // platformCovForgetIds takes ids out of the process-wide name caches, both
 // before the test uses them and again when it ends, so that what the test sees
 // is a lookup and not an answer left behind by something else.
