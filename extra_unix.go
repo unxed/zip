@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"io/fs"
 	"math"
+	"sort"
 )
 
 const infoZipNewUnixExtraID = 0x7875
@@ -90,46 +91,67 @@ func appendUnix000dExtra(extra []byte, hdr *FileHeader) []byte {
 	return append(extra, buf...)
 }
 
-// appendXattrs writes the extended attributes to the 0x7811 tag. Every length
-// in the tag is two bytes: an attribute whose name or value is longer than
-// that is left out, and a set whose whole payload is longer than that leaves
-// the tag out. Writing either under a wrapped length would put a header on
-// disk announcing len&0xffff bytes ahead of the full string, which is not an
-// archive a reader can walk.
+// zip64ExtraReserve is the room an entry's extra field must keep for the
+// zip64 record: Close appends 28 bytes of it to the central directory copy of
+// every entry whose sizes or offset outgrow four bytes, long after the local
+// header carrying the rest of the field went out (the local copy takes 20).
+const zip64ExtraReserve = 28
+
+// appendXattrs writes the extended attributes to the 0x7811 tag. The whole
+// extra field of an entry has a two-byte length, so the tag gets only what is
+// left of it after extra, the tag's own header and zip64ExtraReserve. A set
+// that does not fit is cut down rather than failing the entry, or the whole
+// archive at Close: the attributes are metadata beside the file's data, which
+// is what the archive is for. The smallest attributes go in first, so as many
+// as possible survive, and the ones lost are the bulky ones -- caches and
+// resource forks such as com.apple.ResourceFork -- not the small ones that
+// carry meaning, like security labels, quarantine flags or Finder info. Equal
+// sizes are taken by name, and the kept attributes are written in name order,
+// so the same set always makes the same bytes.
 func appendXattrs(extra []byte, xattrs map[string]string) []byte {
-	if len(xattrs) == 0 {
+	budget := uint16max - len(extra) - 4 - zip64ExtraReserve
+	if len(xattrs) == 0 || budget <= 0 {
 		return extra
 	}
-	var payload []byte
-	for k, v := range xattrs {
-		klen, err := fitUint16(len(k), "extended attribute name")
-		if err != nil {
-			continue
+	record := func(k string) int { return 4 + len(k) + len(xattrs[k]) }
+	keys := make([]string, 0, len(xattrs))
+	for k := range xattrs {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if a, b := record(keys[i]), record(keys[j]); a != b {
+			return a < b
 		}
-		vlen, err := fitUint16(len(v), "extended attribute value")
-		if err != nil {
-			continue
+		return keys[i] < keys[j]
+	})
+	size := 0
+	for n, k := range keys {
+		if size+record(k) > budget {
+			// Every key after this one is at least as large.
+			keys = keys[:n]
+			break
 		}
-		var kv [4]byte
-		binary.LittleEndian.PutUint16(kv[0:2], klen)
-		binary.LittleEndian.PutUint16(kv[2:4], vlen)
-		payload = append(payload, kv[0:2]...)
-		payload = append(payload, k...)
-		payload = append(payload, kv[2:4]...)
-		payload = append(payload, v...)
+		size += record(k)
 	}
-	if len(payload) == 0 {
+	if len(keys) == 0 {
 		return extra
 	}
-	size, err := fitUint16(len(payload), "extended attribute extra field")
-	if err != nil {
-		return extra
+	sort.Strings(keys)
+
+	buf := make([]byte, 4, 4+size)
+	binary.LittleEndian.PutUint16(buf[0:2], xattrExtraID)
+	// #nosec G115 -- size is at most budget, which is below uint16max
+	binary.LittleEndian.PutUint16(buf[2:4], uint16(size))
+	for _, k := range keys {
+		v := xattrs[k]
+		// #nosec G115 -- each length is part of size, which is below uint16max
+		buf = binary.LittleEndian.AppendUint16(buf, uint16(len(k)))
+		buf = append(buf, k...)
+		// #nosec G115 -- each length is part of size, which is below uint16max
+		buf = binary.LittleEndian.AppendUint16(buf, uint16(len(v)))
+		buf = append(buf, v...)
 	}
-	var head [4]byte
-	binary.LittleEndian.PutUint16(head[0:2], xattrExtraID)
-	binary.LittleEndian.PutUint16(head[2:4], size)
-	extra = append(extra, head[:]...)
-	return append(extra, payload...)
+	return append(extra, buf...)
 }
 
 func parseUnixExtra(extra []byte) (uid, gid int, ok bool) {

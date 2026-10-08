@@ -351,9 +351,9 @@ func TestAppendXattrs(t *testing.T) {
 	}
 }
 
-// TestAppendXattrsOverLongLengths covers the three lengths in the 0x7811 tag,
-// each of which is two bytes: an attribute whose name or value does not fit is
-// left out, and a set whose whole payload does not fit leaves the tag out.
+// TestAppendXattrsOverLongLengths covers an attribute whose name or value
+// alone is longer than a two-byte length: it is left out, and with nothing
+// else in the set so is the tag.
 func TestAppendXattrsOverLongLengths(t *testing.T) {
 	long := strings.Repeat("x", uint16max+1)
 
@@ -363,14 +363,6 @@ func TestAppendXattrsOverLongLengths(t *testing.T) {
 	}{
 		{"a name longer than its length", map[string]string{"user." + long: "1"}},
 		{"a value longer than its length", map[string]string{"user.a": long}},
-		{
-			"a payload longer than the tag's length",
-			map[string]string{
-				"user.a": strings.Repeat("x", 30000),
-				"user.b": strings.Repeat("y", 30000),
-				"user.c": strings.Repeat("z", 30000),
-			},
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -378,6 +370,148 @@ func TestAppendXattrsOverLongLengths(t *testing.T) {
 				t.Errorf("the tag was written anyway, adding %d bytes", len(extra)-4)
 			}
 		})
+	}
+}
+
+// xattrsOf parses the 0x7811 tag the way the reader does, failing the test if
+// the extra area holds anything else after head.
+func xattrsOf(t *testing.T, extra []byte, head int) map[string]string {
+	t.Helper()
+	tag := extra[head:]
+	if len(tag) < 4 || binary.LittleEndian.Uint16(tag[0:2]) != xattrExtraID {
+		t.Fatalf("no 0x7811 tag after %d bytes: % x", head, tag[:min(len(tag), 8)])
+	}
+	if size := int(binary.LittleEndian.Uint16(tag[2:4])); size != len(tag)-4 {
+		t.Fatalf("the tag announces %d bytes and carries %d", size, len(tag)-4)
+	}
+	got := map[string]string{}
+	for p := tag[4:]; len(p) > 0; {
+		klen := int(binary.LittleEndian.Uint16(p))
+		k := string(p[2 : 2+klen])
+		p = p[2+klen:]
+		vlen := int(binary.LittleEndian.Uint16(p))
+		got[k] = string(p[2 : 2+vlen])
+		p = p[2+vlen:]
+	}
+	return got
+}
+
+// TestAppendXattrsCutsDownASetThatDoesNotFit covers a set whose payload is
+// longer than the extra field has room for: the smallest attributes are kept,
+// as many as fit, rather than the tag being dropped whole.
+func TestAppendXattrsCutsDownASetThatDoesNotFit(t *testing.T) {
+	xattrs := map[string]string{
+		"user.a":                 strings.Repeat("x", 30000),
+		"user.b":                 strings.Repeat("y", 30000),
+		"user.c":                 strings.Repeat("z", 30001),
+		"com.apple.FinderInfo":   strings.Repeat("\x00", 32),
+		"com.apple.quarantine":   "0081;00000000;f4;",
+		"security.selinux":       "unconfined_u:object_r:user_home_t:s0",
+		"com.apple.ResourceFork": strings.Repeat("r", 40000),
+	}
+	extra := appendXattrs([]byte("head"), xattrs)
+	if len(extra) > uint16max-zip64ExtraReserve {
+		t.Fatalf("the extra field is %d bytes, leaving no room for a zip64 record", len(extra))
+	}
+	got := xattrsOf(t, extra, 4)
+	for _, k := range []string{"user.a", "user.b", "com.apple.FinderInfo", "com.apple.quarantine", "security.selinux"} {
+		if got[k] != xattrs[k] {
+			t.Errorf("%s was not kept", k)
+		}
+	}
+	for _, k := range []string{"user.c", "com.apple.ResourceFork"} {
+		if _, ok := got[k]; ok {
+			t.Errorf("%s was kept, though it does not fit beside the smaller ones", k)
+		}
+	}
+}
+
+// TestAppendXattrsCountsWhatIsAlreadyThere covers the room taken by the tags
+// in front of the 0x7811 one: an attribute that would fit in an empty extra
+// field is left out of one that is nearly full.
+func TestAppendXattrsCountsWhatIsAlreadyThere(t *testing.T) {
+	head := make([]byte, 60000)
+	got := xattrsOf(t, appendXattrs(head, map[string]string{
+		"user.small": "1",
+		"user.big":   strings.Repeat("x", 6000),
+	}), len(head))
+	if _, ok := got["user.big"]; ok {
+		t.Error("user.big was kept past the end of the extra field")
+	}
+	if got["user.small"] != "1" {
+		t.Error("user.small was not kept")
+	}
+
+	if extra := appendXattrs(make([]byte, uint16max), map[string]string{"user.a": "1"}); len(extra) != uint16max {
+		t.Errorf("a full extra field grew by %d bytes", len(extra)-uint16max)
+	}
+}
+
+// TestAppendXattrsIsDeterministic covers the order of the attributes in the
+// tag, which is by name whatever order the map gives them in.
+func TestAppendXattrsIsDeterministic(t *testing.T) {
+	xattrs := map[string]string{}
+	for i := range 32 {
+		xattrs["user."+strings.Repeat("k", i+1)] = strings.Repeat("v", 32-i)
+	}
+	first := appendXattrs(nil, xattrs)
+	for range 20 {
+		if again := appendXattrs(nil, xattrs); !bytes.Equal(again, first) {
+			t.Fatal("the same set made different bytes")
+		}
+	}
+	// Name order: the first record is the shortest name.
+	if klen := binary.LittleEndian.Uint16(first[4:6]); klen != uint16(len("user.k")) {
+		t.Errorf("the first record's name is %d bytes, want %d", klen, len("user.k"))
+	}
+}
+
+// TestWriterKeepsAnEntryWhoseXattrsOverflow covers the case the cut-down set
+// exists for: attributes that would have taken the whole extra field, beside
+// an owner name and a comment, still make an entry the writer accepts and the
+// reader reads back with the attributes that fit.
+func TestWriterKeepsAnEntryWhoseXattrsOverflow(t *testing.T) {
+	var buf bytes.Buffer
+	w := NewWriter(&buf)
+	fh := &FileHeader{
+		Name:     "a.txt",
+		Method:   Store,
+		Modified: time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC),
+		Uname:    "user",
+		Gname:    "staff",
+		Comment:  "comment",
+		Xattrs: map[string]string{
+			"user.small": "1",
+			"user.big":   strings.Repeat("x", uint16max-16),
+		},
+	}
+	fw, err := w.CreateHeader(fh)
+	if err != nil {
+		t.Fatalf("CreateHeader: %v", err)
+	}
+	if _, err := fw.Write([]byte("data")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	r, err := NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	if len(r.File) != 1 {
+		t.Fatalf("%d entries, want 1", len(r.File))
+	}
+	f := r.File[0]
+	if f.Xattrs["user.small"] != "1" {
+		t.Errorf("user.small reads back as %q", f.Xattrs["user.small"])
+	}
+	if _, ok := f.Xattrs["user.big"]; ok {
+		t.Error("user.big reads back, though it cannot fit")
+	}
+	if f.Uname != "user" || f.Gname != "staff" {
+		t.Errorf("owner reads back as %q:%q", f.Uname, f.Gname)
 	}
 }
 

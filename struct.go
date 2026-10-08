@@ -464,17 +464,17 @@ func (fh *FileHeader) injectAutoExtras() uint16 {
 		fh.ExternalAttrs |= pkwareHardLinkAttr
 	}
 
-	// 3.2 Xattrs (0x7811)
-	if len(fh.Xattrs) > 0 && !hasTag(xattrExtraID) {
-		fh.Extra = appendXattrs(fh.Extra, fh.Xattrs)
-	}
+	// 3.2 Xattrs (0x7811) go last, see step 5.
 
 	// 3.3 NTFS ACLs (0x4453)
+	//
+	// Not budgeted like the xattrs: an ACL that leaves too little of the
+	// extra area for the tags behind it still fails the entry.
 	if len(fh.Acl) > 0 && !hasTag(ntfsAclExtraID) {
 		fh.Extra = appendNtfsAcl(fh.Extra, fh.Acl)
 	}
 
-	// 3.4 Unix Owner/Group Strings (0x7812)
+	// 3.4 Unix Owner/Group Strings (0x7817)
 	if (fh.Uname != "" || fh.Gname != "") && !hasTag(unixOwnerNameExtraID) {
 		fh.Extra = appendUnixOwnerNamesExtra(fh.Extra, fh.Uname, fh.Gname)
 	}
@@ -522,6 +522,14 @@ func (fh *FileHeader) injectAutoExtras() uint16 {
 		buf[8] = fh.AESStrength
 		binary.LittleEndian.PutUint16(buf[9:11], originalMethod)
 		fh.Extra = append(fh.Extra, buf...)
+	}
+
+	// 5. Xattrs (0x7811)
+	//
+	// Last, because the tag takes whatever room the extra area has left
+	// once every other tag is in: see appendXattrs.
+	if len(fh.Xattrs) > 0 && !hasTag(xattrExtraID) {
+		fh.Extra = appendXattrs(fh.Extra, fh.Xattrs)
 	}
 	return originalMethod
 }
