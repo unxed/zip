@@ -628,6 +628,11 @@ func findHiddenIndexAt(r io.ReaderAt, offset int64, owner string) (hiddenIndexSp
 				compSize64 = eb.uint64()
 				break
 			}
+			// A tag declaring more than the field has left ends the
+			// walk: slicing past it would panic.
+			if len(eb) < sz {
+				break
+			}
 			eb = eb[sz:]
 		}
 	}

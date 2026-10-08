@@ -719,10 +719,12 @@ func TestReaderCovHiddenIndexSkipsExtraFieldsItDoesNotWant(t *testing.T) {
 	// tags in front of the one wanted have to be stepped over.
 	raw, header, payload := seekableArchive(t, false, 4096)
 	binary.LittleEndian.PutUint32(raw[header+18:], uint32max)
-	binary.LittleEndian.PutUint16(raw[header+28:], 8)
+	extraLen := binary.LittleEndian.Uint16(raw[header+28:])
+	binary.LittleEndian.PutUint16(raw[header+28:], extraLen+8)
 
-	// The eight bytes now read as the extra field are the first eight of
-	// the payload, which is where a tag that is not the zip64 one goes.
+	// The eight bytes now read as the end of the extra field are the first
+	// eight of the payload, which is where a tag that is not the zip64 one
+	// goes, behind the tags the index already carries.
 	b := writeBuf(raw[payload:])
 	b.uint16(0x9999)
 	b.uint16(4)
@@ -731,6 +733,25 @@ func TestReaderCovHiddenIndexSkipsExtraFieldsItDoesNotWant(t *testing.T) {
 	// With no zip64 field to be found the size stays saturated, so the
 	// payload read back is the rest of the archive -- and the numbers in it
 	// are not the offsets of a few kilobytes of entry.
+	if err := openSeekableErr(t, raw); err == nil {
+		t.Fatal("an index read out of the middle of the archive was believed")
+	}
+}
+
+func TestReaderCovHiddenIndexStopsAtATruncatedExtraField(t *testing.T) {
+	// A tag in the index entry's extra field that declares more bytes than
+	// the field has left used to be sliced past, which panicked.
+	raw, header, payload := seekableArchive(t, false, 4096)
+	binary.LittleEndian.PutUint32(raw[header+18:], uint32max)
+	extraLen := binary.LittleEndian.Uint16(raw[header+28:])
+	binary.LittleEndian.PutUint16(raw[header+28:], extraLen+4)
+
+	// The four bytes now ending the extra field are a tag header whose
+	// declared size runs past the end of the field.
+	b := writeBuf(raw[payload:])
+	b.uint16(0x9999)
+	b.uint16(4)
+
 	if err := openSeekableErr(t, raw); err == nil {
 		t.Fatal("an index read out of the middle of the archive was believed")
 	}
