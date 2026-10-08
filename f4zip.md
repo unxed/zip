@@ -61,13 +61,28 @@ f4 extensions standard adopts the **SOZip (Seek-Optimized ZIP)** methodology for
 #### 2.4.1 Chunk-Based Deflate (SOZip Standard)
 For chunked streams (where the decompressor state is periodically flushed using `Z_FULL_FLUSH`), implementations MUST follow the official [SOZip specification](https://github.com/sozip/sozip-spec).
 - The index is stored as an uncompressed, hidden file named `.${filename}.sozip.idx` placed immediately after the compressed file data.
-- The hidden file contains a Local File Header but is **intentionally omitted** from the Central Directory to remain invisible to non-SOZip-aware archivers. As in SOZip itself, a reader that walks the local headers instead of the Central Directory (a streaming reader) sees it as an ordinary entry.
+- The hidden file contains a Local File Header but is **intentionally omitted** from the Central Directory to remain invisible to non-SOZip-aware archivers. As in SOZip itself, a reader that walks the local headers instead of the Central Directory (a streaming reader) would see it as an ordinary entry; section 2.4.3 tells it how to skip it.
 
 #### 2.4.2 Stateful Zran/FlatBuffers Index
 For streams where maximal compression is preserved (no dictionary flushing), true random access requires storing the decompressor state (e.g., the 32KB dictionary window for DEFLATE).
 - Following the SOZip pattern, this index MUST be stored as a hidden file named `.${filename}.gzidx` immediately following the compressed data.
 - The file contains a Local File Header but NO Central Directory entry.
 - The payload is a `ratarmount`-compatible binary payload (GZIDX) allowing the decompressor to reconstruct its exact state at specific offsets.
+
+#### 2.4.3 Hidden Entry Marker (Extra Field `0x7812`)
+Marks a local entry that is intentionally omitted from the Central Directory, such as the index files of 2.4.1 and 2.4.2, so that a streaming reader, which has no Central Directory to consult, can skip it.
+
+**Header ID:** `0x7812`
+**Placement:** Local file header only (the entry has no central directory header).
+**Data Layout:** Empty (data size `0`). Readers MUST ignore any payload, so that a later version can add one.
+
+**Writers:** SHOULD put this field in the local header of every entry they leave out of the Central Directory on purpose. The SOZip specification allows extra fields in the index's local header, and SOZip readers find the index by name and position, so the field does not affect them.
+
+**Streaming readers:**
+- SHOULD skip an entry whose local header carries `0x7812`.
+- MAY also skip, as an index written without the marker (e.g. by other SOZip writers), a stored entry named `.${filename}.sozip.idx` or `.${filename}.gzidx` that immediately follows the entry `${filename}`.
+
+Readers that use the Central Directory never see these entries and need do nothing.
 
 ### 2.5. Incremental Sync Support (`.zip_dumpdir`)
 A control file stored within the archive to facilitate "incremental restore" or "mirroring" behavior.
@@ -104,7 +119,8 @@ The Header IDs used by these extensions are self-assigned and are not registered
 | Header ID | Use |
 |---|---|
 | `0x7811` | Unix Extended Attributes (section 2.1) |
-| `0x7812`–`0x7816` | Reserved for future versions of these extensions |
+| `0x7812` | Hidden Entry Marker (section 2.4.3) |
+| `0x7813`–`0x7816` | Reserved for future versions of these extensions |
 | `0x7817` | Unix Owner Names (section 2.2) |
 | `0x7819` | XCrypt payload marker (used by `unxed/zip`, not specified here) |
 
@@ -113,4 +129,4 @@ The Header IDs used by these extensions are self-assigned and are not registered
 2. **Atomicity:** When applying complex metadata like ACLs (`0x4453`) or Xattrs (`0x7811`), apply them *after* the file content has been successfully written and closed.
 
 ## 4. Changes
-- **0.7:** Section 2.1 now gives the record layout the reference implementation writes and reads (`KeyLength`, `Key`, `ValueLength`, `Value`); 0.6 listed both lengths before both strings, which the reference implementation never wrote. Added placement, versioning and size limit rules for `0x7811`, empty names and full precedence for `0x7817`, the note on streaming readers in 2.4.1, and the Header ID table in 2.8. Removed the duplicated sections 2.8 and 2.9, and `0x7811` keys from the path normalization guideline (they are attribute names, not paths).
+- **0.7:** Section 2.1 now gives the record layout the reference implementation writes and reads (`KeyLength`, `Key`, `ValueLength`, `Value`); 0.6 listed both lengths before both strings, which the reference implementation never wrote. Added placement, versioning and size limit rules for `0x7811`, empty names and full precedence for `0x7817`, the Hidden Entry Marker `0x7812` and the rules for streaming readers in 2.4.3, and the Header ID table in 2.8. Removed the duplicated sections 2.8 and 2.9, and `0x7811` keys from the path normalization guideline (they are attribute names, not paths).

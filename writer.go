@@ -1092,6 +1092,13 @@ func (w *fileWriter) writeHiddenIndex() error {
 		CompressedSize64:   uint64(len(payload)),
 	}
 	fh.injectAutoExtras()
+	// An empty 0x7812 tag says the entry is in no central directory record,
+	// so a reader walking the local headers, which has no central directory
+	// to tell it, can skip it rather than list the index as a file. SOZip
+	// lets this header carry extra fields, and its readers find the index by
+	// name and position, so they never look at the tag.
+	fh.Extra = binary.LittleEndian.AppendUint16(fh.Extra, hiddenEntryExtraID)
+	fh.Extra = binary.LittleEndian.AppendUint16(fh.Extra, 0)
 
 	h := &header{
 		FileHeader: fh,

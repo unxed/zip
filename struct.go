@@ -65,8 +65,8 @@ const (
 	unicodePathExtraID    = 0x7075 // Info-ZIP Unicode Path Extra Field
 	//                      0x756e // ASi UNIX
 	//                             // 0x756f..0x7810 unused
-	xattrExtraID = 0x7811 // f4 extensions: Xattrs
-	//                      0x7812 // Reserved for further f4 extensions versions
+	xattrExtraID       = 0x7811 // f4 extensions: Xattrs
+	hiddenEntryExtraID = 0x7812 // f4 extensions: local entry left out of the central directory
 	//                      0x7813 // Reserved for further f4 extensions versions
 	//                      0x7814 // Reserved for further f4 extensions versions
 	//                      0x7815 // Reserved for further f4 extensions versions
