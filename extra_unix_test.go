@@ -379,7 +379,7 @@ func xattrsOf(t *testing.T, extra []byte, head int) map[string]string {
 	t.Helper()
 	tag := extra[head:]
 	if len(tag) < 4 || binary.LittleEndian.Uint16(tag[0:2]) != xattrExtraID {
-		t.Fatalf("no 0x7811 tag after %d bytes: % x", head, tag[:min(len(tag), 8)])
+		t.Fatalf("no 0x7811 tag after %d bytes (%d bytes follow)", head, len(tag))
 	}
 	if size := int(binary.LittleEndian.Uint16(tag[2:4])); size != len(tag)-4 {
 		t.Fatalf("the tag announces %d bytes and carries %d", size, len(tag)-4)
