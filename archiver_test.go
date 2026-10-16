@@ -1208,3 +1208,72 @@ func TestArchiver_XattrsOnLinksAndSpecialFiles(t *testing.T) {
 		})
 	}
 }
+
+// skewedBinaryBytes returns n bytes that hold every one of the 256 values but
+// are dominated by zeros, which is what the start of an executable, a library
+// or a database looks like: all values present, far from random. The order-0
+// entropy is about 5 bits per byte.
+func skewedBinaryBytes(n int) []byte {
+	data := make([]byte, n)
+	for i := range data {
+		if i%2 == 1 {
+			data[i] = byte(i / 2)
+		}
+	}
+	return data
+}
+
+// TestAnalyzeBlock_StoreDecisionFollowsEntropy pins the rule the peek goes by:
+// a block is stored when its entropy is close to 8 bits per byte, and not
+// merely because every byte value occurs in it (f4 #1753: DLL, EXE and DB
+// files were stored uncompressed).
+func TestAnalyzeBlock_StoreDecisionFollowsEntropy(t *testing.T) {
+	cases := []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"random-like data is stored", highEntropyBytes(8192), true},
+		{"all 256 values but skewed is deflated", skewedBinaryBytes(65536), false},
+		{"200 even values is deflated", mixedEntropyBytes(8192), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if store, _ := analyzeBlock(tc.data); store != tc.want {
+				t.Errorf("analyzeBlock stored=%v, want %v", store, tc.want)
+			}
+		})
+	}
+}
+
+// TestArchiver_CompressFileDeflatesSkewedBinary is the end-to-end side of the
+// rule above: a binary with all 256 byte values keeps the Deflate method.
+func TestArchiver_CompressFileDeflatesSkewedBinary(t *testing.T) {
+	var buf bytes.Buffer
+	a, err := NewArchiver(&buf, t.TempDir())
+	if err != nil {
+		t.Fatalf("building the archiver: %v", err)
+	}
+	closeAt(t, a)
+
+	fp, err := filepool.New(t.TempDir(), 1, -1)
+	if err != nil {
+		t.Fatalf("building the file pool: %v", err)
+	}
+	closeAt(t, fp)
+
+	data := skewedBinaryBytes(65536)
+	hdr := &FileHeader{Name: "entry.dll", Method: Deflate, UncompressedSize64: uint64(len(data))}
+	hdr.SetMode(0644)
+	fi := mockFileInfo{name: "entry.dll", mode: 0644}
+
+	if err := a.compressFile(context.Background(), bytes.NewReader(data), fi, hdr, fp.Get()); err != nil {
+		t.Fatalf("compressFile: %v", err)
+	}
+	if hdr.Method != Deflate {
+		t.Errorf("the entry was written with method %d, want Deflate", hdr.Method)
+	}
+	if hdr.CompressedSize64 >= hdr.UncompressedSize64 {
+		t.Errorf("compressed %d bytes to %d: the entry was not shrunk", hdr.UncompressedSize64, hdr.CompressedSize64)
+	}
+}
