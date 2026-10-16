@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -970,6 +971,16 @@ func (a *Archiver) createFile(ctx context.Context, path string, fi os.FileInfo, 
 	return a.compressFile(ctx, f, fi, hdr, tmp)
 }
 
+// storeEntropyBits is the order-0 entropy, in bits per byte, from which the
+// peek at the start of a file reads it as already compressed. Deflate gains
+// nothing on data this close to the 8-bit ceiling (random or compressed data
+// sits above 7.95 on a 4 KiB sample), whereas executables, libraries and
+// databases come in well below it (a DLL at 6.2, a SQLite icon cache at 7.8)
+// and shrink by a fifth to a half. Counting the distinct byte values instead
+// stored every such file, because the first 64 KiB of any binary holds all 256
+// of them (f4 #1753).
+const storeEntropyBits = 7.9
+
 func analyzeBlock(p []byte) (store, huffmanOnly bool) {
 	if len(p) < 4096 {
 		return false, false
@@ -986,7 +997,7 @@ func analyzeBlock(p []byte) (store, huffmanOnly bool) {
 			maxFreq = freq[b]
 		}
 	}
-	if unique > 224 {
+	if blockEntropy(&freq, len(p)) >= storeEntropyBits {
 		return true, false
 	}
 	// #nosec G115 -- p is the peek buffer, at most 64 KiB, so a quarter of its length fits a uint32 many times over
@@ -997,6 +1008,20 @@ func analyzeBlock(p []byte) (store, huffmanOnly bool) {
 		return false, true
 	}
 	return false, false
+}
+
+// blockEntropy is the order-0 Shannon entropy, in bits per byte, of a block of
+// n bytes whose byte values were counted into freq.
+func blockEntropy(freq *[256]uint32, n int) float64 {
+	var h float64
+	for _, c := range freq {
+		if c == 0 {
+			continue
+		}
+		q := float64(c) / float64(n)
+		h -= q * math.Log2(q)
+	}
+	return h
 }
 
 func (a *Archiver) compressFile(ctx context.Context, r io.ReadSeeker, fi os.FileInfo, hdr *FileHeader, tmp *filepool.File) error {
