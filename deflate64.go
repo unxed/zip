@@ -1008,6 +1008,16 @@ func (im *inflaterManaged) decodeBlockFastInnerLoop(input *inputBuffer) (int, bo
 }
 
 func (im *inflaterManaged) decodeDynamicBlockHeader(input *inputBuffer) error {
+	// A fixed block points these at the package-level tables, and building this
+	// block's tables writes through the pointer. Give the block its own storage
+	// first, or the write lands in process-global state and every later fixed
+	// block in any stream decodes with this block's tables.
+	if im.literalLengthTree == staticLiteralTree {
+		im.literalLengthTree = newHuffmanTreeInvalid()
+	}
+	if im.distanceTree == staticDistanceTree {
+		im.distanceTree = newHuffmanTreeInvalid()
+	}
 loop:
 	for {
 		switch im.state {
