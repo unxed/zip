@@ -2,6 +2,7 @@ package zip
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"io"
 	"os"
@@ -17,6 +18,30 @@ func TestDeflate64_Registration(t *testing.T) {
 	dcomp := decompressor(Deflate64)
 	if dcomp == nil {
 		t.Fatal("Deflate64 decompressor not registered")
+	}
+}
+
+func TestStaticBlockAfterDynamicBlockUsesTheFixedTable(t *testing.T) {
+	stream, err := hex.DecodeString("727402108407a0000000008000000000" +
+		"00000000000000000000000000000000" +
+		"000000000000000000000000c88b888a" +
+		"fdcfdd0300")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// This fixed→dynamic→fixed stream used to overwrite the shared fixed
+	// tables while building the dynamic block's tables.
+	for i := 0; i < 2; i++ {
+		r := newDeflate64Reader(bytes.NewReader(stream))
+		got, err := io.ReadAll(r)
+		closeAt(t, r)
+		if err != nil {
+			t.Fatalf("decode %d failed after %q: %v", i+1, got, err)
+		}
+		if want := "ABDEFGH"; string(got) != want {
+			t.Fatalf("decode %d got %q, want %q", i+1, got, want)
+		}
 	}
 }
 

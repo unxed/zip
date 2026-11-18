@@ -1008,6 +1008,15 @@ func (im *inflaterManaged) decodeBlockFastInnerLoop(input *inputBuffer) (int, bo
 }
 
 func (im *inflaterManaged) decodeDynamicBlockHeader(input *inputBuffer) error {
+	// Fixed blocks share immutable package-level trees. Dynamic blocks build
+	// their tables in place, so give this inflater its own storage first.
+	if im.literalLengthTree == staticLiteralTree {
+		im.literalLengthTree = newHuffmanTreeInvalid()
+	}
+	if im.distanceTree == staticDistanceTree {
+		im.distanceTree = newHuffmanTreeInvalid()
+	}
+
 loop:
 	for {
 		switch im.state {
