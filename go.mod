@@ -3,7 +3,7 @@ module github.com/unxed/zip
 go 1.25.5
 
 require (
-	github.com/klauspost/compress v1.19.2
+	github.com/klauspost/compress v1.20.2
 	github.com/unxed/par2 v0.1.3
 	github.com/unxed/xz v0.1.47
 	github.com/unxed/zipcharset v0.1.5
