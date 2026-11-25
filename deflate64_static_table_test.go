@@ -24,17 +24,6 @@ func mustDecodeHex(s string) []byte {
 	return data
 }
 
-func TestStaticBlockAfterDynamicBlockUsesTheFixedTable(t *testing.T) {
-	got, err := io.ReadAll(newDeflate64Reader(bytes.NewReader(staticBlockAfterDynamicBlock)))
-	if err != nil {
-		t.Fatalf("decode failed after %q: %v", got, err)
-	}
-
-	if want := "ABDEFGH"; string(got) != want {
-		t.Fatalf("decoded %q, want %q", got, want)
-	}
-}
-
 func TestFixedTableSurvivesRepeatedDecodes(t *testing.T) {
 	for attempt := 0; attempt < 2; attempt++ {
 		got, err := io.ReadAll(newDeflate64Reader(bytes.NewReader(staticBlockAfterDynamicBlock)))
