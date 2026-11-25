@@ -4,6 +4,8 @@ github.com/danielmorsing/gonzbee v0.0.0-20170928120813-4deb2f96db05 h1:tmM1ENb3Z
 github.com/danielmorsing/gonzbee v0.0.0-20170928120813-4deb2f96db05/go.mod h1:/By0gd1aCX/bU4xZTGTqg4vWxhY/RqtMlgvH66IpW6w=
 github.com/klauspost/compress v1.19.2 h1:hMRETovs/pu/dVWN7zIT1PGG8t509MwT6bO7XSi26R8=
 github.com/klauspost/compress v1.19.2/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=
+github.com/klauspost/compress v1.20.2 h1:v5tiZvm1KGLyg5d5oXdXe3lsSPrbEUiKoXGia//I7Qo=
+github.com/klauspost/compress v1.20.2/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=
 github.com/klauspost/cpuid/v2 v2.0.2 h1:pd2FBxFydtPn2ywTLStbFg9CJKrojATnpeJWSP7Ys4k=
 github.com/klauspost/cpuid/v2 v2.0.2/go.mod h1:FInQzS24/EEf25PyTYn52gqo7WaD8xa0213Md/qVLRg=
 github.com/unxed/localecp v0.1.6 h1:r4PfgucfjiMAhK7kwWUC8mehphBnZadp51JFcPJx2UQ=
